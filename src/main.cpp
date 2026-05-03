@@ -45,6 +45,8 @@ struct AppConfig {
     int cols = 5;
     int buttonSize = 96;
     int gap = 10;
+    int windowX = CW_USEDEFAULT;
+    int windowY = CW_USEDEFAULT;
     bool alwaysOnTop = true;
     bool showTrayIcon = false;
     std::map<int, std::wstring> pageNames;
@@ -126,6 +128,7 @@ static constexpr int IDC_GAP = 3104;
 static constexpr int IDC_TOPMOST = 3105;
 static constexpr int IDC_PAGE_NAME = 3106;
 static constexpr int IDC_TRAY_ICON = 3107;
+static constexpr int IDC_DELETE_PAGE = 3108;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -219,6 +222,8 @@ static void LoadConfig() {
     g.config.cols = GetPrivateProfileIntW(L"Window", L"Cols", 5, g.configPath.c_str());
     g.config.buttonSize = GetPrivateProfileIntW(L"Window", L"ButtonSize", 96, g.configPath.c_str());
     g.config.gap = GetPrivateProfileIntW(L"Window", L"Gap", 10, g.configPath.c_str());
+    g.config.windowX = GetPrivateProfileIntW(L"Window", L"X", CW_USEDEFAULT, g.configPath.c_str());
+    g.config.windowY = GetPrivateProfileIntW(L"Window", L"Y", CW_USEDEFAULT, g.configPath.c_str());
     g.config.alwaysOnTop = GetPrivateProfileIntW(L"Window", L"AlwaysOnTop", 1, g.configPath.c_str()) != 0;
     g.config.showTrayIcon = GetPrivateProfileIntW(L"Window", L"ShowTrayIcon", 0, g.configPath.c_str()) != 0;
     int uiVersion = GetPrivateProfileIntW(L"Window", L"UiVersion", 0, g.configPath.c_str());
@@ -260,6 +265,8 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"Cols", std::to_wstring(g.config.cols).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ButtonSize", std::to_wstring(g.config.buttonSize).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"Gap", std::to_wstring(g.config.gap).c_str(), g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"X", std::to_wstring(g.config.windowX).c_str(), g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"Y", std::to_wstring(g.config.windowY).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ShowTrayIcon", g.config.showTrayIcon ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"UiVersion", L"2", g.configPath.c_str());
@@ -332,6 +339,42 @@ static std::vector<int> ExistingPages() {
     return pages;
 }
 
+static void DeletePageSectionsFromConfigFile(int page) {
+    if (g.configPath.empty()) return;
+
+    wchar_t sections[32768]{};
+    GetPrivateProfileSectionNamesW(sections, 32768, g.configPath.c_str());
+    const std::wstring pageSection = L"Page:" + std::to_wstring(page);
+    const std::wstring buttonPrefix = L"Button:" + std::to_wstring(page) + L":";
+
+    for (wchar_t* p = sections; *p; p += wcslen(p) + 1) {
+        std::wstring section = p;
+        if (section == pageSection || section.rfind(buttonPrefix, 0) == 0) {
+            WritePrivateProfileStringW(section.c_str(), nullptr, nullptr, g.configPath.c_str());
+        }
+    }
+}
+
+static bool DeletePage(int page) {
+    std::vector<int> pages = ExistingPages();
+    if (pages.size() <= 1 || std::find(pages.begin(), pages.end(), page) == pages.end()) return false;
+
+    auto it = std::find(pages.begin(), pages.end(), page);
+    int nextPage = 0;
+    if (it + 1 != pages.end()) {
+        nextPage = *(it + 1);
+    } else {
+        nextPage = pages.front() == page && pages.size() > 1 ? pages[1] : pages.front();
+    }
+
+    g.config.pages.erase(page);
+    g.config.pageNames.erase(page);
+    DeletePageSectionsFromConfigFile(page);
+    g.currentPage = nextPage;
+    CurrentButtons();
+    return true;
+}
+
 static void MovePage(bool next) {
     std::vector<int> pages = ExistingPages();
     if (pages.empty()) return;
@@ -365,6 +408,15 @@ static void ResizeWindowToGrid() {
         width, height, SWP_NOMOVE | SWP_NOACTIVATE);
     SetWindowRgn(g.hwnd, CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18), TRUE);
     SetLayeredWindowAttributes(g.hwnd, 0, WINDOW_OPACITY, LWA_ALPHA);
+}
+
+static void RememberWindowPosition() {
+    if (!g.hwnd || IsIconic(g.hwnd)) return;
+    RECT window{};
+    if (GetWindowRect(g.hwnd, &window)) {
+        g.config.windowX = window.left;
+        g.config.windowY = window.top;
+    }
 }
 
 static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int points, bool bold) {
@@ -1432,6 +1484,7 @@ static void ShowSettingsDialog() {
 struct PageSettingsContext {
     int pageIndex = 0;
     bool accepted = false;
+    bool deleted = false;
 };
 
 static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1444,8 +1497,9 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Page", 32, 28, 180, 28);
         AddLabel(hwnd, L"Name", 56, 78, 150, 28);
         AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 220, 74, 330, 34);
-        AddButton(hwnd, IDOK, L"OK", 338, 152, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 152, 104, 38);
+        AddButton(hwnd, IDC_DELETE_PAGE, L"Delete page", 56, 154, 150, 38);
+        AddButton(hwnd, IDOK, L"OK", 338, 154, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 154, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -1453,6 +1507,19 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             g.config.pageNames[ctx->pageIndex] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
             ctx->accepted = true;
             DestroyWindow(hwnd);
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_DELETE_PAGE && ctx) {
+            if (ExistingPages().size() <= 1) {
+                MessageBoxW(hwnd, L"The last page cannot be deleted.", L"Delete page", MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+            std::wstring message = L"Delete \"" + PageName(ctx->pageIndex) + L"\" and all buttons on this page?";
+            if (MessageBoxW(hwnd, message.c_str(), L"Delete page", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+                ctx->deleted = true;
+                ctx->accepted = true;
+                DestroyWindow(hwnd);
+            }
             return 0;
         }
         if (LOWORD(wp) == IDCANCEL) {
@@ -1492,6 +1559,9 @@ static void ShowPageSettingsDialog() {
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
+        if (ctx.deleted) {
+            DeletePage(ctx.pageIndex);
+        }
         SaveConfig();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
@@ -1518,6 +1588,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ResizeWindowToGrid();
         ApplyTrayIconSetting();
         return 0;
+    case WM_MOVE:
+        RememberWindowPosition();
+        return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -1607,6 +1680,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        RememberWindowPosition();
         UpdateTrayIcon(false);
         SaveConfig();
         PostQuitMessage(0);
@@ -1637,7 +1711,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
         wc.lpszClassName,
         L"Launcher Widget",
         WS_POPUP,
-        CW_USEDEFAULT, CW_USEDEFAULT, 420, 280,
+        g.config.windowX, g.config.windowY, 420, 280,
         nullptr, nullptr, instance, nullptr);
 
     if (!g.hwnd) return 1;
