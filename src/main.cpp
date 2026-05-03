@@ -12,6 +12,7 @@
 #include <urlmon.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cwctype>
 #include <fstream>
 #include <map>
@@ -549,12 +550,13 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
         } else {
             Arc(hdc, left + side / 2, top + side / 3, left + side * 4 / 5, top + side * 2 / 3,
                 left + side * 3 / 5, top + side / 3, left + side * 3 / 5, top + side * 2 / 3);
+            const int markX = left + side * 5 / 6;
+            const int markHalf = std::max(4, side / 8);
+            MoveToEx(hdc, markX - markHalf, midY, nullptr);
+            LineTo(hdc, markX + markHalf, midY);
             if (volumeUp) {
-                Arc(hdc, left + side / 2, top + side / 5, left + side, top + side * 4 / 5,
-                    left + side * 3 / 4, top + side / 5, left + side * 3 / 4, top + side * 4 / 5);
-            } else {
-                MoveToEx(hdc, left + side * 2 / 3, midY, nullptr);
-                LineTo(hdc, left + side * 5 / 6, midY);
+                MoveToEx(hdc, markX, midY - markHalf, nullptr);
+                LineTo(hdc, markX, midY + markHalf);
             }
         }
     } else if (screenshot) {
@@ -616,6 +618,38 @@ static void DrawHeaderControl(HDC hdc, RECT rc) {
     DeleteObject(pen);
 }
 
+static void DrawSettingsIcon(HDC hdc, RECT rc) {
+    const int cx = (rc.left + rc.right) / 2;
+    const int cy = (rc.top + rc.bottom) / 2;
+    const int outer = std::min(rc.right - rc.left, rc.bottom - rc.top) / 3;
+    const int inner = std::max(3, outer / 2);
+    const COLORREF color = RGB(245, 247, 250);
+
+    HPEN pen = CreatePen(PS_SOLID, 2, color);
+    HBRUSH brush = CreateSolidBrush(color);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+    for (int i = 0; i < 8; ++i) {
+        const double angle = i * 3.14159265358979323846 / 4.0;
+        const int x1 = cx + static_cast<int>(cos(angle) * (outer + 1));
+        const int y1 = cy + static_cast<int>(sin(angle) * (outer + 1));
+        const int x2 = cx + static_cast<int>(cos(angle) * (outer + 5));
+        const int y2 = cy + static_cast<int>(sin(angle) * (outer + 5));
+        MoveToEx(hdc, x1, y1, nullptr);
+        LineTo(hdc, x2, y2);
+    }
+
+    Ellipse(hdc, cx - outer, cy - outer, cx + outer, cy + outer);
+    SelectObject(hdc, brush);
+    Ellipse(hdc, cx - inner, cy - inner, cx + inner, cy + inner);
+
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+}
+
 static void Paint(HDC hdc) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
@@ -642,7 +676,7 @@ static void Paint(HDC hdc) {
     DrawHeaderControl(hdc, closeRect);
     DrawCenteredText(hdc, prevRect, L"<", 12, true);
     DrawCenteredText(hdc, nextRect, L">", 12, true);
-    DrawCenteredText(hdc, settingsRect, L"SET", 7, true);
+    DrawSettingsIcon(hdc, settingsRect);
     DrawCenteredText(hdc, minimizeRect, L"_", 11, true);
     DrawCenteredText(hdc, closeRect, L"X", 10, true);
 
