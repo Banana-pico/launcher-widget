@@ -15,6 +15,7 @@
 #include <cwctype>
 #include <fstream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -437,12 +438,20 @@ static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int poi
 static bool IsWebUrl(const std::wstring& value);
 static std::wstring HostFromUrl(const std::wstring& url);
 
+static void ConfigureImageGraphics(Graphics& graphics) {
+    graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(PixelOffsetModeHalf);
+    graphics.SetCompositingQuality(CompositingQualityHighQuality);
+}
+
 static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
     if (path.rfind(L"favicon:", 0) == 0) return false;
     if (path.empty() || !PathFileExistsW(path.c_str())) return false;
     const wchar_t* ext = PathFindExtensionW(path.c_str());
     if (_wcsicmp(ext, L".svg") == 0) return false;
     Graphics graphics(hdc);
+    ConfigureImageGraphics(graphics);
     Image image(path.c_str());
     if (image.GetLastStatus() != Ok) return false;
     int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 28;
@@ -470,7 +479,15 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     if (!SHGetFileInfoW(target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) return false;
     int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
     if (side < 24) side = 24;
-    DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
+    std::unique_ptr<Bitmap> bitmap(Bitmap::FromHICON(info.hIcon));
+    if (bitmap && bitmap->GetLastStatus() == Ok) {
+        Graphics graphics(hdc);
+        ConfigureImageGraphics(graphics);
+        Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, side, side);
+        graphics.DrawImage(bitmap.get(), dest);
+    } else {
+        DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
+    }
     DestroyIcon(info.hIcon);
     return true;
 }
