@@ -1,5 +1,17 @@
+# Visual Studio patterns
 bin/
 obj/
 *.user
 *.suo
 .vs/
+*.pdb
+*.ilk
+*.log
+*.tlog
+*.lastbuildstate
+*.idb
+*.iobj
+*.ipdb
+
+# Inno Setup artifacts
+bin/Installer/
