@@ -422,27 +422,16 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     return true;
 }
 
-static void DrawHeaderControl(HDC hdc, RECT rc, bool pageControl) {
-    HBRUSH brush = CreateSolidBrush(pageControl ? RGB(44, 60, 78) : RGB(37, 43, 52));
-    HPEN pen = CreatePen(PS_SOLID, pageControl ? 2 : 1, pageControl ? RGB(125, 190, 255) : RGB(104, 116, 136));
+static void DrawHeaderControl(HDC hdc, RECT rc) {
+    HBRUSH brush = CreateSolidBrush(RGB(37, 43, 52));
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
     HGDIOBJ oldBrush = SelectObject(hdc, brush);
     HGDIOBJ oldPen = SelectObject(hdc, pen);
-    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, pageControl ? 14 : 6, pageControl ? 14 : 6);
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
     SelectObject(hdc, oldBrush);
     SelectObject(hdc, oldPen);
     DeleteObject(brush);
     DeleteObject(pen);
-
-    if (pageControl) {
-        HPEN innerPen = CreatePen(PS_SOLID, 1, RGB(33, 40, 49));
-        HGDIOBJ oldInner = SelectObject(hdc, innerPen);
-        HGDIOBJ oldInnerBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-        RECT inner{ rc.left + 3, rc.top + 3, rc.right - 3, rc.bottom - 3 };
-        RoundRect(hdc, inner.left, inner.top, inner.right, inner.bottom, 10, 10);
-        SelectObject(hdc, oldInnerBrush);
-        SelectObject(hdc, oldInner);
-        DeleteObject(innerPen);
-    }
 }
 
 static void Paint(HDC hdc) {
@@ -466,11 +455,9 @@ static void Paint(HDC hdc) {
     RECT closeRect = HeaderButtonRect(0);
     DrawCenteredText(hdc, pageTitleRect, PageName(g.currentPage), 9, true);
 
-    DrawHeaderControl(hdc, prevRect, true);
-    DrawHeaderControl(hdc, nextRect, true);
-    DrawHeaderControl(hdc, settingsRect, false);
-    DrawHeaderControl(hdc, minimizeRect, false);
-    DrawHeaderControl(hdc, closeRect, false);
+    DrawHeaderControl(hdc, settingsRect);
+    DrawHeaderControl(hdc, minimizeRect);
+    DrawHeaderControl(hdc, closeRect);
     DrawCenteredText(hdc, prevRect, L"<", 12, true);
     DrawCenteredText(hdc, nextRect, L">", 12, true);
     DrawCenteredText(hdc, settingsRect, L"SET", 7, true);
