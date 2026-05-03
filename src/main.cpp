@@ -535,9 +535,10 @@ static HWND AddButton(HWND parent, int id, const wchar_t* text, int x, int y, in
 }
 
 static HWND AddCombo(HWND parent, int id, int x, int y, int w, int h) {
-    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
+    HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,
         x, y, w, h, parent, ControlId(id), g.instance, nullptr);
     SetControlFont(combo);
+    SendMessageW(combo, CB_SETMINVISIBLE, 12, 0);
     return combo;
 }
 
@@ -888,8 +889,8 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
         AddLabel(hwnd, L"Action", 24, 22, 120, 24);
         AddLabel(hwnd, L"Type", 40, 58, 100, 24);
-        HWND combo = AddCombo(hwnd, IDC_ACTION, 150, 56, 390, 220);
-        for (const wchar_t* item : { L"None", L"App (.exe)", L"URL", L"File", L"Folder", L"Windows Settings", L"Command", L"Keys" }) {
+        HWND combo = AddCombo(hwnd, IDC_ACTION, 150, 56, 390, 320);
+        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
