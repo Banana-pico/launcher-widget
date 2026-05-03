@@ -992,7 +992,7 @@ static void UpdateTrayIcon(bool add) {
 
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
-    nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    nid.hIcon = LoadIconW(g.instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     wcscpy_s(nid.szTip, L"Launcher Widget");
     Shell_NotifyIconW(NIM_ADD, &nid);
 }
