@@ -10,6 +10,7 @@
 #include <commdlg.h>
 #include <gdiplus.h>
 #include <urlmon.h>
+#include "resource.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2148,6 +2149,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     wc.hInstance = instance;
     wc.lpszClassName = L"LauncherWidgetWindow";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     RegisterClassW(&wc);
 
     g.hwnd = CreateWindowExW(
