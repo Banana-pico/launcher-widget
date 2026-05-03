@@ -129,6 +129,7 @@ static constexpr int IDC_TOPMOST = 3105;
 static constexpr int IDC_PAGE_NAME = 3106;
 static constexpr int IDC_TRAY_ICON = 3107;
 static constexpr int IDC_DELETE_PAGE = 3108;
+static constexpr int IDC_CLEAR_BUTTON = 3109;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -998,6 +999,7 @@ struct ButtonEditorContext {
     ButtonConfig original;
     ButtonConfig* target = nullptr;
     bool accepted = false;
+    bool cleared = false;
 };
 
 static std::wstring ComboText(HWND combo) {
@@ -1282,6 +1284,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 220, 392, 588, 34);
         AddButton(hwnd, IDC_BROWSE, L"Browse", 842, 392, 116, 34);
 
+        AddButton(hwnd, IDC_CLEAR_BUTTON, L"Clear", 56, 522, 120, 38);
         AddButton(hwnd, IDOK, L"OK", 754, 522, 96, 38, BS_DEFPUSHBUTTON);
         AddButton(hwnd, IDCANCEL, L"Cancel", 862, 522, 96, 38);
         UpdateButtonEditorFields(hwnd);
@@ -1316,6 +1319,14 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             if (kind == L"App (.exe)") ImportStartMenuApp(hwnd);
             else if (kind == L"Windows Settings") ChooseWindowsSetting(hwnd);
             else ImportFavoriteUrl(hwnd);
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_CLEAR_BUTTON && ctx) {
+            if (MessageBoxW(hwnd, L"Clear this button assignment and display settings?", L"Clear button", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+                ctx->cleared = true;
+                ctx->accepted = true;
+                DestroyWindow(hwnd);
+            }
             return 0;
         }
         if (LOWORD(wp) == IDOK && ctx) {
@@ -1390,6 +1401,9 @@ static void EditButton(int index) {
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
+        if (ctx.cleared) {
+            buttons[index] = ButtonConfig{};
+        }
         SaveConfig();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
