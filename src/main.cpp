@@ -1,3 +1,7 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <windowsx.h>
 #include <shellapi.h>
@@ -383,10 +387,14 @@ static void AddLabel(HWND parent, const wchar_t* text, int x, int y, int w, int 
     CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE, x, y, w, h, parent, nullptr, g.instance, nullptr);
 }
 
+static HMENU ControlId(int id) {
+    return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
+}
+
 static HWND AddEdit(HWND parent, int id, const std::wstring& value, int x, int y, int w, int h) {
     return CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", value.c_str(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        x, y, w, h, parent, reinterpret_cast<HMENU>(id), g.instance, nullptr);
+        x, y, w, h, parent, ControlId(id), g.instance, nullptr);
 }
 
 struct ButtonEditorContext {
@@ -409,10 +417,10 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Image", 14, 84, 78, 22);
         AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 96, 82, 250, 24);
         CreateWindowExW(0, L"BUTTON", L"Browse", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            354, 82, 72, 24, hwnd, reinterpret_cast<HMENU>(IDC_BROWSE), g.instance, nullptr);
+            354, 82, 72, 24, hwnd, ControlId(IDC_BROWSE), g.instance, nullptr);
         AddLabel(hwnd, L"Action", 14, 118, 78, 22);
         HWND combo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-            96, 116, 330, 160, hwnd, reinterpret_cast<HMENU>(IDC_ACTION), g.instance, nullptr);
+            96, 116, 330, 160, hwnd, ControlId(IDC_ACTION), g.instance, nullptr);
         for (const wchar_t* item : { L"None", L"Open", L"Command", L"Settings", L"Keys" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
@@ -422,9 +430,9 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Args", 14, 186, 78, 22);
         AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 96, 184, 330, 24);
         CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            270, 226, 74, 28, hwnd, reinterpret_cast<HMENU>(IDOK), g.instance, nullptr);
+            270, 226, 74, 28, hwnd, ControlId(IDOK), g.instance, nullptr);
         CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            352, 226, 74, 28, hwnd, reinterpret_cast<HMENU>(IDCANCEL), g.instance, nullptr);
+            352, 226, 74, 28, hwnd, ControlId(IDCANCEL), g.instance, nullptr);
         return 0;
     }
     case WM_COMMAND:
@@ -521,12 +529,12 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         AddLabel(hwnd, L"Gap", 14, 120, 100, 22);
         AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 128, 118, 120, 24);
         CreateWindowExW(0, L"BUTTON", L"Always on top", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-            128, 154, 170, 24, hwnd, reinterpret_cast<HMENU>(IDC_TOPMOST), g.instance, nullptr);
+            128, 154, 170, 24, hwnd, ControlId(IDC_TOPMOST), g.instance, nullptr);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
         CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            160, 198, 74, 28, hwnd, reinterpret_cast<HMENU>(IDOK), g.instance, nullptr);
+            160, 198, 74, 28, hwnd, ControlId(IDOK), g.instance, nullptr);
         CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-            242, 198, 74, 28, hwnd, reinterpret_cast<HMENU>(IDCANCEL), g.instance, nullptr);
+            242, 198, 74, 28, hwnd, ControlId(IDCANCEL), g.instance, nullptr);
         return 0;
     }
     case WM_COMMAND:
