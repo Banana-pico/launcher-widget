@@ -38,16 +38,18 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 
 ## ボタン設定
 
-ボタン編集では、最初にアクション種別を選び、その種別に合った入力欄を設定します。
+ボタン編集では、最初にアクション種別を選び、その種別に合った入力欄を設定します。その後、タイトル、短い表示テキスト、画像を調整します。
 
-- `App (.exe)`: `Select` から `.exe` ファイルを選択できます。
-- `URL`: URL を直接入力できます。`Favorites` から Windows Favorites、Microsoft Edge、Google Chrome のブックマーク候補を取り込めます。
+- `App (.exe)`: `Select` から `.exe` ファイルを選択できます。`Start menu` からスタートメニュー登録済みアプリも選べます。
+- `URL`: URL を直接入力できます。`Favorites` から Windows Favorites、Microsoft Edge、Google Chrome のブックマーク候補を取り込めます。お気に入りから取り込んだ場合はタイトル候補も反映されます。
 - `File`: `Select` から任意のファイルを選択できます。
 - `Folder`: `Select` からフォルダーを選択できます。
 - `Windows Settings`: `ms-settings:` などの Windows 設定 URI を入力します。
 - `Command`: コマンドと引数を分けて入力します。
 - `Keys`: `CTRL+ALT+T` のようなキー同時押しを入力します。
 - `None`: 何もしないボタンにします。
+
+画像を指定しない場合、`.exe` はアプリのアイコン、URL はサイトの favicon を自動表示します。取得できない場合は表示テキストにフォールバックします。
 
 設定ファイルは次の場所に保存されます。
 

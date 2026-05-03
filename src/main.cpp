@@ -9,6 +9,7 @@
 #include <shlwapi.h>
 #include <commdlg.h>
 #include <gdiplus.h>
+#include <urlmon.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -20,6 +21,7 @@
 
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "urlmon.lib")
 
 using namespace Gdiplus;
 
@@ -288,7 +290,11 @@ static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int poi
     DeleteObject(font);
 }
 
+static bool IsWebUrl(const std::wstring& value);
+static std::wstring HostFromUrl(const std::wstring& url);
+
 static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
+    if (path.rfind(L"favicon:", 0) == 0) return false;
     if (path.empty() || !PathFileExistsW(path.c_str())) return false;
     const wchar_t* ext = PathFindExtensionW(path.c_str());
     if (_wcsicmp(ext, L".svg") == 0) return false;
@@ -300,6 +306,16 @@ static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
     Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 10, side, side);
     graphics.DrawImage(&image, dest);
     return true;
+}
+
+static bool DrawUrlFavicon(HDC hdc, const std::wstring& url, RECT rc) {
+    if (!IsWebUrl(url)) return false;
+    std::wstring host = HostFromUrl(url);
+    if (host.empty()) return false;
+    std::wstring faviconUrl = L"https://" + host + L"/favicon.ico";
+    wchar_t cachePath[MAX_PATH]{};
+    if (FAILED(URLDownloadToCacheFileW(nullptr, faviconUrl.c_str(), cachePath, MAX_PATH, 0, nullptr))) return false;
+    return DrawCustomImage(hdc, cachePath, rc);
 }
 
 static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
@@ -363,6 +379,9 @@ static void Paint(HDC hdc) {
         RECT iconRect = r;
         iconRect.bottom -= 20;
         bool drew = DrawCustomImage(hdc, b.imagePath, r);
+        if (!drew && IsWebUrl(b.action.target)) {
+            drew = DrawUrlFavicon(hdc, b.action.target, r);
+        }
         if (!drew && (b.action.type == ActionType::Open || b.action.type == ActionType::Command)) {
             drew = DrawShellIcon(hdc, b.action.target, r);
         }
@@ -527,6 +546,22 @@ struct FavoriteLink {
     std::wstring url;
 };
 
+struct AppCandidate {
+    std::wstring title;
+    std::wstring target;
+};
+
+static bool IsWebUrl(const std::wstring& value) {
+    return value.rfind(L"http://", 0) == 0 || value.rfind(L"https://", 0) == 0;
+}
+
+static std::wstring HostFromUrl(const std::wstring& url) {
+    size_t start = url.find(L"://");
+    start = start == std::wstring::npos ? 0 : start + 3;
+    size_t end = url.find_first_of(L"/?#", start);
+    return url.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+}
+
 static std::wstring UrlDecodeAscii(const std::string& value) {
     std::string decoded;
     for (size_t i = 0; i < value.size(); ++i) {
@@ -609,12 +644,74 @@ static void CollectChromiumBookmarks(const std::wstring& path, std::vector<Favor
                 title = UrlDecodeAscii(json.substr(nameFirst + 1, nameLast - nameFirst - 1));
             }
         }
-        if (!url.empty() && (url.rfind(L"http://", 0) == 0 || url.rfind(L"https://", 0) == 0)) {
+        if (!url.empty() && IsWebUrl(url)) {
             links.push_back({ title, url });
         }
         pos = last + 1;
         if (links.size() >= 80) break;
     }
+}
+
+static std::wstring ResolveShortcutTarget(const std::wstring& shortcutPath) {
+    IShellLinkW* link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return L"";
+    IPersistFile* file = nullptr;
+    std::wstring target;
+    if (SUCCEEDED(link->QueryInterface(IID_PPV_ARGS(&file)))) {
+        if (SUCCEEDED(file->Load(shortcutPath.c_str(), STGM_READ))) {
+            wchar_t path[MAX_PATH]{};
+            if (SUCCEEDED(link->GetPath(path, MAX_PATH, nullptr, SLGP_UNCPRIORITY)) && path[0]) {
+                target = path;
+            }
+        }
+        file->Release();
+    }
+    link->Release();
+    return target;
+}
+
+static void CollectStartMenuShortcuts(const std::wstring& dir, std::vector<AppCandidate>& apps) {
+    std::wstring pattern = dir + L"\\*";
+    WIN32_FIND_DATAW fd{};
+    HANDLE find = FindFirstFileW(pattern.c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) return;
+    do {
+        if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+        std::wstring path = dir + L"\\" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            CollectStartMenuShortcuts(path, apps);
+        } else if (_wcsicmp(PathFindExtensionW(path.c_str()), L".lnk") == 0) {
+            std::wstring target = ResolveShortcutTarget(path);
+            if (!target.empty() && _wcsicmp(PathFindExtensionW(target.c_str()), L".exe") == 0) {
+                wchar_t title[MAX_PATH]{};
+                wcscpy_s(title, fd.cFileName);
+                PathRemoveExtensionW(title);
+                apps.push_back({ title, target });
+            }
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+static void CollectKnownFolderApps(REFKNOWNFOLDERID folderId, std::vector<AppCandidate>& apps) {
+    PWSTR path = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(folderId, 0, nullptr, &path))) {
+        CollectStartMenuShortcuts(std::wstring(path) + L"\\Programs", apps);
+        CoTaskMemFree(path);
+    }
+}
+
+static std::vector<AppCandidate> LoadStartMenuApps() {
+    std::vector<AppCandidate> apps;
+    CollectKnownFolderApps(FOLDERID_StartMenu, apps);
+    CollectKnownFolderApps(FOLDERID_CommonStartMenu, apps);
+    std::sort(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
+        return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
+    });
+    apps.erase(std::unique(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
+        return _wcsicmp(a.target.c_str(), b.target.c_str()) == 0;
+    }), apps.end());
+    return apps;
 }
 
 static std::vector<FavoriteLink> LoadBrowserFavorites() {
@@ -671,7 +768,7 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     bool needsTarget = kind != L"None";
     bool needsArgs = kind == L"App (.exe)" || kind == L"File" || kind == L"Command";
     bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder";
-    bool canImport = kind == L"URL";
+    bool canImport = kind == L"URL" || kind == L"App (.exe)";
 
     SetWindowTextW(targetLabel, kind == L"URL" ? L"URL" :
         kind == L"Keys" ? L"Key chord" :
@@ -680,6 +777,8 @@ static void UpdateButtonEditorFields(HWND hwnd) {
         kind == L"Folder" ? L"Folder" :
         kind == L"File" ? L"File" : L"Target");
     SetWindowTextW(argsLabel, kind == L"Command" ? L"Arguments" : L"Options");
+    SetWindowTextW(browse, kind == L"Folder" ? L"Folder" : L"Select");
+    SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" : L"Favorites");
 
     SetVisible(targetLabel, needsTarget);
     SetVisible(target, needsTarget);
@@ -688,6 +787,17 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     SetVisible(browse, canBrowse);
     SetVisible(import, canImport);
 }
+
+static std::wstring TextBadgeFromTitle(const std::wstring& title, const wchar_t* fallback) {
+    std::wstring text;
+    for (wchar_t c : title) {
+        if (iswalpha(c) || iswdigit(c)) text.push_back(static_cast<wchar_t>(towupper(c)));
+        if (text.size() == 3) break;
+    }
+    return text.empty() ? fallback : text;
+}
+
+static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind);
 
 static void ImportFavoriteUrl(HWND hwnd) {
     std::vector<FavoriteLink> links = LoadBrowserFavorites();
@@ -712,6 +822,60 @@ static void ImportFavoriteUrl(HWND hwnd) {
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), link.url.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), link.title.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), L"URL");
+        FillDisplayDefaults(hwnd, L"URL");
+    }
+}
+
+static void ImportStartMenuApp(HWND hwnd) {
+    std::vector<AppCandidate> apps = LoadStartMenuApps();
+    if (apps.empty()) {
+        MessageBoxW(hwnd, L"No Start menu applications were found.", L"Start menu", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    HMENU menu = CreatePopupMenu();
+    const int maxItems = std::min<int>(static_cast<int>(apps.size()), 80);
+    for (int i = 0; i < maxItems; ++i) {
+        std::wstring label = apps[i].title.empty() ? apps[i].target : apps[i].title;
+        if (label.size() > 72) label = label.substr(0, 69) + L"...";
+        AppendMenuW(menu, MF_STRING, 6000 + i, label.c_str());
+    }
+    RECT rc{};
+    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
+    DestroyMenu(menu);
+    if (cmd >= 6000 && cmd < 6000 + maxItems) {
+        const AppCandidate& app = apps[cmd - 6000];
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), app.target.c_str());
+        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), app.title.c_str());
+        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) {
+            std::wstring text = TextBadgeFromTitle(app.title, L"APP");
+            SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), text.c_str());
+        }
+        FillDisplayDefaults(hwnd, L"App (.exe)");
+    }
+}
+
+static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
+    HWND titleCtrl = GetDlgItem(hwnd, IDC_TITLE);
+    HWND textCtrl = GetDlgItem(hwnd, IDC_TEXT);
+    HWND targetCtrl = GetDlgItem(hwnd, IDC_TARGET);
+    std::wstring target = GetWindowTextString(targetCtrl);
+    if (target.empty()) return;
+
+    if (kind == L"URL") {
+        std::wstring host = HostFromUrl(target);
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, host.empty() ? target.c_str() : host.c_str());
+        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"URL");
+    } else if (kind == L"App (.exe)" || kind == L"File" || kind == L"Folder") {
+        wchar_t name[MAX_PATH]{};
+        wcscpy_s(name, PathFindFileNameW(target.c_str()));
+        if (kind != L"Folder") PathRemoveExtensionW(name);
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, name);
+        if (GetWindowTextLengthW(textCtrl) == 0) {
+            std::wstring badge = TextBadgeFromTitle(name, kind == L"App (.exe)" ? L"APP" : L"FILE");
+            SetWindowTextW(textCtrl, badge.c_str());
+        }
     }
 }
 
@@ -722,33 +886,33 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<ButtonEditorContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Display", 24, 22, 120, 24);
-        AddLabel(hwnd, L"Title", 40, 58, 100, 24);
-        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 150, 56, 390, 28);
-        AddLabel(hwnd, L"Text", 40, 96, 100, 24);
-        AddEdit(hwnd, IDC_TEXT, ctx->original.text, 150, 94, 130, 28);
-        AddLabel(hwnd, L"Image", 40, 134, 100, 24);
-        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 150, 132, 300, 28);
-        AddButton(hwnd, IDC_BROWSE, L"Browse", 462, 132, 78, 28);
-
-        AddLabel(hwnd, L"Action", 24, 184, 120, 24);
-        AddLabel(hwnd, L"Type", 40, 220, 100, 24);
-        HWND combo = AddCombo(hwnd, IDC_ACTION, 150, 218, 390, 220);
+        AddLabel(hwnd, L"Action", 24, 22, 120, 24);
+        AddLabel(hwnd, L"Type", 40, 58, 100, 24);
+        HWND combo = AddCombo(hwnd, IDC_ACTION, 150, 56, 390, 220);
         for (const wchar_t* item : { L"None", L"App (.exe)", L"URL", L"File", L"Folder", L"Windows Settings", L"Command", L"Keys" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
         SendMessageW(combo, CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(kind.c_str()));
 
-        AddLabel(hwnd, L"Target", 40, 260, 100, 24, IDC_TARGET_LABEL);
-        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 150, 258, 300, 28);
-        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 462, 258, 78, 28);
-        AddButton(hwnd, IDC_URL_IMPORT, L"Favorites", 462, 258, 90, 28);
-        AddLabel(hwnd, L"Options", 40, 298, 100, 24, IDC_ARGS_LABEL);
-        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 150, 296, 390, 28);
+        AddLabel(hwnd, L"Target", 40, 98, 100, 24, IDC_TARGET_LABEL);
+        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 150, 96, 300, 28);
+        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 462, 96, 78, 28);
+        AddButton(hwnd, IDC_URL_IMPORT, L"Favorites", 462, 96, 90, 28);
+        AddLabel(hwnd, L"Options", 40, 136, 100, 24, IDC_ARGS_LABEL);
+        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 150, 134, 390, 28);
 
-        AddButton(hwnd, IDOK, L"OK", 370, 360, 80, 32, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 460, 360, 80, 32);
+        AddLabel(hwnd, L"Display", 24, 194, 120, 24);
+        AddLabel(hwnd, L"Title", 40, 230, 100, 24);
+        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 150, 228, 390, 28);
+        AddLabel(hwnd, L"Text", 40, 268, 100, 24);
+        AddEdit(hwnd, IDC_TEXT, ctx->original.text, 150, 266, 130, 28);
+        AddLabel(hwnd, L"Image", 40, 306, 100, 24);
+        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 150, 304, 300, 28);
+        AddButton(hwnd, IDC_BROWSE, L"Browse", 462, 304, 78, 28);
+
+        AddButton(hwnd, IDOK, L"OK", 370, 370, 80, 32, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 460, 370, 80, 32);
         UpdateButtonEditorFields(hwnd);
         return 0;
     }
@@ -770,24 +934,22 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             else if (kind == L"Folder") target = BrowseForFolder(hwnd);
             if (!target.empty()) {
                 SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), target.c_str());
-                if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) {
-                    wchar_t name[MAX_PATH]{};
-                    wcscpy_s(name, PathFindFileNameW(target.c_str()));
-                    PathRemoveExtensionW(name);
-                    SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), name);
-                }
+                FillDisplayDefaults(hwnd, kind);
             }
             return 0;
         }
         if (LOWORD(wp) == IDC_URL_IMPORT) {
-            ImportFavoriteUrl(hwnd);
+            std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
+            if (kind == L"App (.exe)") ImportStartMenuApp(hwnd);
+            else ImportFavoriteUrl(hwnd);
             return 0;
         }
         if (LOWORD(wp) == IDOK && ctx) {
+            std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
+            FillDisplayDefaults(hwnd, kind);
             ctx->target->title = GetWindowTextString(GetDlgItem(hwnd, IDC_TITLE));
             ctx->target->text = GetWindowTextString(GetDlgItem(hwnd, IDC_TEXT));
             ctx->target->imagePath = GetWindowTextString(GetDlgItem(hwnd, IDC_IMAGE));
-            std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
             if (kind == L"None") ctx->target->action.type = ActionType::None;
             else if (kind == L"Windows Settings") ctx->target->action.type = ActionType::Settings;
             else if (kind == L"Command") ctx->target->action.type = ActionType::Command;
@@ -1012,6 +1174,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     EnableDpiAwareness();
+    HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     g.instance = instance;
     InitUiFont();
     GdiplusStartupInput gdiplusInput;
@@ -1044,5 +1207,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     }
     if (g.uiFont) DeleteObject(g.uiFont);
     GdiplusShutdown(g.gdiplusToken);
+    if (SUCCEEDED(comInit)) CoUninitialize();
     return static_cast<int>(msg.wParam);
 }
