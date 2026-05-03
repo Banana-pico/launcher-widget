@@ -10,6 +10,7 @@
 #include <commdlg.h>
 #include <gdiplus.h>
 #include <urlmon.h>
+#include <commctrl.h>
 #include "resource.h"
 
 #include <algorithm>
@@ -24,6 +25,7 @@
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "comctl32.lib")
 
 using namespace Gdiplus;
 
@@ -63,6 +65,8 @@ struct AppState {
     AppConfig config;
     int currentPage = 0;
     std::wstring configPath;
+    HWND tooltipHwnd = nullptr;
+    int lastHoveredButton = -1;
 };
 
 static AppState g;
@@ -471,6 +475,20 @@ static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int poi
     DrawTextW(hdc, text.c_str(), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(hdc, old);
     DeleteObject(font);
+}
+
+static bool IsTextTruncated(HDC hdc, const std::wstring& text, RECT rc, int points, bool bold) {
+    LOGFONTW lf{};
+    lf.lfHeight = -MulDiv(points, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    lf.lfWeight = bold ? FW_SEMIBOLD : FW_NORMAL;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    HFONT font = CreateFontIndirectW(&lf);
+    HFONT old = static_cast<HFONT>(SelectObject(hdc, font));
+    RECT calcRect = { 0, 0, 0, 0 };
+    DrawTextW(hdc, text.c_str(), -1, &calcRect, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(hdc, old);
+    DeleteObject(font);
+    return (calcRect.right - calcRect.left) > (rc.right - rc.left);
 }
 
 static bool IsWebUrl(const std::wstring& value);
@@ -2014,11 +2032,29 @@ static void ShowContextMenu(POINT pt, int buttonIndex, bool pageTitle) {
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-    case WM_CREATE:
+    case WM_CREATE: {
         g.hwnd = hwnd;
+        INITCOMMONCONTROLSEX icex{};
+        icex.dwSize = sizeof(icex);
+        icex.dwICC = ICC_WIN95_CLASSES;
+        InitCommonControlsEx(&icex);
+
+        g.tooltipHwnd = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+            hwnd, nullptr, g.instance, nullptr);
+        
+        TOOLINFOW ti{ sizeof(ti) };
+        ti.uFlags = TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE;
+        ti.hwnd = hwnd;
+        ti.uId = (UINT_PTR)hwnd;
+        ti.lpszText = const_cast<wchar_t*>(L"");
+        SendMessageW(g.tooltipHwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+
         ResizeWindowToGrid();
         ApplyTrayIconSetting();
         return 0;
+    }
     case WM_MOVE:
         RememberWindowPosition();
         return DefWindowProcW(hwnd, msg, wp, lp);
@@ -2076,6 +2112,70 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         bool pageTitle = index < 0 && PtInRect(&titleRect, pt);
         ClientToScreen(hwnd, &pt);
         ShowContextMenu(pt, index, pageTitle);
+        return 0;
+    }
+    case WM_MOUSEMOVE: {
+        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        int index = HitButton(pt);
+        
+        TRACKMOUSEEVENT tme{ sizeof(tme) };
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hwnd;
+        TrackMouseEvent(&tme);
+
+        if (index != g.lastHoveredButton) {
+            g.lastHoveredButton = index;
+            bool show = false;
+            std::wstring tooltipText;
+
+            if (index >= 0) {
+                auto& buttons = CurrentButtons();
+                const ButtonConfig& b = buttons[index];
+                std::wstring title = b.title.empty() ? L"Empty" : b.title;
+                
+                RECT r = ButtonRect(index);
+                RECT titleRect = r;
+                titleRect.top = r.bottom - 24;
+                titleRect.left += 6;
+                titleRect.right -= 6;
+
+                HDC hdc = GetDC(hwnd);
+                if (IsTextTruncated(hdc, title, titleRect, 9, false)) {
+                    tooltipText = title;
+                    show = true;
+                }
+                ReleaseDC(hwnd, hdc);
+            }
+
+            TOOLINFOW ti{ sizeof(ti) };
+            ti.hwnd = hwnd;
+            ti.uId = (UINT_PTR)hwnd;
+            
+            if (show) {
+                ti.lpszText = const_cast<wchar_t*>(tooltipText.c_str());
+                SendMessageW(g.tooltipHwnd, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
+                
+                POINT screenPt = pt;
+                ClientToScreen(hwnd, &screenPt);
+                SendMessageW(g.tooltipHwnd, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 10));
+                SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+            } else {
+                SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
+            }
+        } else if (index >= 0) {
+            // Update position if still hovering
+            POINT screenPt = pt;
+            ClientToScreen(hwnd, &screenPt);
+            SendMessageW(g.tooltipHwnd, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 10));
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE: {
+        g.lastHoveredButton = -1;
+        TOOLINFOW ti{ sizeof(ti) };
+        ti.hwnd = hwnd;
+        ti.uId = (UINT_PTR)hwnd;
+        SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
         return 0;
     }
     case WM_SIZE:
