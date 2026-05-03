@@ -63,6 +63,10 @@ static constexpr int IDM_ALWAYS_ON_TOP = 1004;
 static constexpr int IDM_EXIT = 1005;
 static constexpr int IDM_EDIT_BASE = 2000;
 
+static constexpr int HEADER_HEIGHT = 32;
+static constexpr int HEADER_BUTTON_SIZE = 24;
+static constexpr int HEADER_BUTTON_GAP = 6;
+
 static constexpr int IDC_TITLE = 3001;
 static constexpr int IDC_TEXT = 3002;
 static constexpr int IDC_IMAGE = 3003;
@@ -194,10 +198,17 @@ static RECT ButtonRect(int index) {
     int gap = g.config.gap;
     return RECT{
         gap + col * (s + gap),
-        gap + row * (s + gap),
+        HEADER_HEIGHT + gap + row * (s + gap),
         gap + col * (s + gap) + s,
-        gap + row * (s + gap) + s
+        HEADER_HEIGHT + gap + row * (s + gap) + s
     };
+}
+
+static RECT HeaderButtonRect(int slotFromRight) {
+    RECT client{};
+    GetClientRect(g.hwnd, &client);
+    const int right = client.right - HEADER_BUTTON_GAP - slotFromRight * (HEADER_BUTTON_SIZE + HEADER_BUTTON_GAP);
+    return RECT{ right - HEADER_BUTTON_SIZE, 4, right, 4 + HEADER_BUTTON_SIZE };
 }
 
 static int HitButton(POINT pt) {
@@ -213,7 +224,7 @@ static void ResizeWindowToGrid() {
     if (!g.hwnd) return;
     RECT rc{ 0, 0,
         g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap),
-        g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap) };
+        HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap) };
     AdjustWindowRectEx(&rc, WS_POPUP | WS_THICKFRAME, FALSE, WS_EX_TOOLWINDOW);
     SetWindowPos(g.hwnd, g.config.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
         rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOACTIVATE);
@@ -266,6 +277,29 @@ static void Paint(HDC hdc) {
     HBRUSH bg = CreateSolidBrush(RGB(18, 20, 24));
     FillRect(hdc, &client, bg);
     DeleteObject(bg);
+
+    RECT header{ 0, 0, client.right, HEADER_HEIGHT };
+    HBRUSH headerBrush = CreateSolidBrush(RGB(30, 34, 40));
+    FillRect(hdc, &header, headerBrush);
+    DeleteObject(headerBrush);
+
+    RECT headerTitleRect{ 10, 0, client.right - 72, HEADER_HEIGHT };
+    DrawCenteredText(hdc, headerTitleRect, L"Launcher", 9, true);
+
+    RECT settingsRect = HeaderButtonRect(1);
+    RECT closeRect = HeaderButtonRect(0);
+    HBRUSH controlBrush = CreateSolidBrush(RGB(48, 54, 64));
+    HPEN controlPen = CreatePen(PS_SOLID, 1, RGB(88, 96, 110));
+    HGDIOBJ oldControlBrush = SelectObject(hdc, controlBrush);
+    HGDIOBJ oldControlPen = SelectObject(hdc, controlPen);
+    RoundRect(hdc, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom, 6, 6);
+    RoundRect(hdc, closeRect.left, closeRect.top, closeRect.right, closeRect.bottom, 6, 6);
+    SelectObject(hdc, oldControlBrush);
+    SelectObject(hdc, oldControlPen);
+    DeleteObject(controlBrush);
+    DeleteObject(controlPen);
+    DrawCenteredText(hdc, settingsRect, L"SET", 7, true);
+    DrawCenteredText(hdc, closeRect, L"X", 10, true);
 
     auto& buttons = CurrentButtons();
     const int count = g.config.rows * g.config.cols;
@@ -614,13 +648,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONDOWN: {
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+        RECT settingsRect = HeaderButtonRect(1);
+        RECT closeRect = HeaderButtonRect(0);
+        if (PtInRect(&settingsRect, pt)) {
+            ShowSettingsDialog();
+            return 0;
+        }
+        if (PtInRect(&closeRect, pt)) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
         int index = HitButton(pt);
         if (index >= 0) {
             auto& buttons = CurrentButtons();
             ExecuteAction(buttons[index].action);
-        } else {
+        } else if (pt.y < HEADER_HEIGHT) {
             ReleaseCapture();
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        } else {
+            ClientToScreen(hwnd, &pt);
+            ShowContextMenu(pt, -1);
         }
         return 0;
     }
@@ -644,6 +691,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         } else if (id == IDM_EXIT) DestroyWindow(hwnd);
         return 0;
     }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
     case WM_DESTROY:
         SaveConfig();
         PostQuitMessage(0);
