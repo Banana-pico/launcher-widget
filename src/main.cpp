@@ -643,35 +643,38 @@ static void DrawHeaderControl(HDC hdc, RECT rc) {
 }
 
 static void DrawSettingsIcon(HDC hdc, RECT rc) {
-    const int cx = (rc.left + rc.right) / 2;
-    const int cy = (rc.top + rc.bottom) / 2;
-    const int outer = std::min(rc.right - rc.left, rc.bottom - rc.top) / 3;
-    const int inner = std::max(3, outer / 2);
-    const COLORREF color = RGB(245, 247, 250);
+    Graphics graphics(hdc);
+    graphics.SetSmoothingMode(SmoothingModeAntiAlias);
 
-    HPEN pen = CreatePen(PS_SOLID, 2, color);
-    HBRUSH brush = CreateSolidBrush(color);
-    HGDIOBJ oldPen = SelectObject(hdc, pen);
-    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    const float cx = (rc.left + rc.right) / 2.0f;
+    const float cy = (rc.top + rc.bottom) / 2.0f;
+    const float size = static_cast<float>(std::min(rc.right - rc.left, rc.bottom - rc.top));
+    const float bodyRadius = size * 0.23f;
+    const float tipRadius = size * 0.32f;
+    const float holeRadius = size * 0.10f;
 
-    for (int i = 0; i < 8; ++i) {
-        const double angle = i * 3.14159265358979323846 / 4.0;
-        const int x1 = cx + static_cast<int>(cos(angle) * (outer + 1));
-        const int y1 = cy + static_cast<int>(sin(angle) * (outer + 1));
-        const int x2 = cx + static_cast<int>(cos(angle) * (outer + 5));
-        const int y2 = cy + static_cast<int>(sin(angle) * (outer + 5));
-        MoveToEx(hdc, x1, y1, nullptr);
-        LineTo(hdc, x2, y2);
+    const int numTeeth = 8;
+    PointF pts[32];
+    for (int i = 0; i < numTeeth; ++i) {
+        double aCenter = i * 45.0;
+        double a1 = (aCenter - 12.0) * 3.14159265358979323846 / 180.0;
+        double a2 = (aCenter - 7.0) * 3.14159265358979323846 / 180.0;
+        double a3 = (aCenter + 7.0) * 3.14159265358979323846 / 180.0;
+        double a4 = (aCenter + 12.0) * 3.14159265358979323846 / 180.0;
+
+        pts[i * 4 + 0] = PointF(static_cast<float>(cx + bodyRadius * cos(a1)), static_cast<float>(cy + bodyRadius * sin(a1)));
+        pts[i * 4 + 1] = PointF(static_cast<float>(cx + tipRadius * cos(a2)), static_cast<float>(cy + tipRadius * sin(a2)));
+        pts[i * 4 + 2] = PointF(static_cast<float>(cx + tipRadius * cos(a3)), static_cast<float>(cy + tipRadius * sin(a3)));
+        pts[i * 4 + 3] = PointF(static_cast<float>(cx + bodyRadius * cos(a4)), static_cast<float>(cy + bodyRadius * sin(a4)));
     }
 
-    Ellipse(hdc, cx - outer, cy - outer, cx + outer, cy + outer);
-    SelectObject(hdc, brush);
-    Ellipse(hdc, cx - inner, cy - inner, cx + inner, cy + inner);
+    GraphicsPath path;
+    path.SetFillMode(FillModeAlternate);
+    path.AddPolygon(pts, 32);
+    path.AddEllipse(cx - holeRadius, cy - holeRadius, holeRadius * 2.0f, holeRadius * 2.0f);
 
-    SelectObject(hdc, oldBrush);
-    SelectObject(hdc, oldPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
+    SolidBrush brush(Color(255, 245, 247, 250));
+    graphics.FillPath(&brush, &path);
 }
 
 static void Paint(HDC hdc) {
