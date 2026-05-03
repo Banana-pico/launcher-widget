@@ -782,17 +782,17 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" : L"Favorites");
 
     if (kind == L"App (.exe)") {
-        MoveWindow(target, 160, 96, 330, 28, TRUE);
-        MoveWindow(browse, 500, 96, 68, 28, TRUE);
-        MoveWindow(import, 578, 96, 92, 28, TRUE);
+        MoveWindow(target, 160, 96, 410, 28, TRUE);
+        MoveWindow(browse, 590, 96, 82, 28, TRUE);
+        MoveWindow(import, 686, 96, 112, 28, TRUE);
     } else if (kind == L"URL") {
-        MoveWindow(target, 160, 96, 360, 28, TRUE);
-        MoveWindow(import, 528, 96, 110, 28, TRUE);
+        MoveWindow(target, 160, 96, 500, 28, TRUE);
+        MoveWindow(import, 686, 96, 112, 28, TRUE);
     } else if (kind == L"File" || kind == L"Folder") {
-        MoveWindow(target, 160, 96, 360, 28, TRUE);
-        MoveWindow(browse, 528, 96, 110, 28, TRUE);
+        MoveWindow(target, 160, 96, 500, 28, TRUE);
+        MoveWindow(browse, 686, 96, 112, 28, TRUE);
     } else {
-        MoveWindow(target, 160, 96, 470, 28, TRUE);
+        MoveWindow(target, 160, 96, 638, 28, TRUE);
     }
 
     SetVisible(targetLabel, needsTarget);
@@ -903,7 +903,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
         AddLabel(hwnd, L"Action", 24, 22, 120, 24);
         AddLabel(hwnd, L"Type", 40, 58, 100, 24);
-        HWND combo = AddCombo(hwnd, IDC_ACTION, 160, 56, 470, 320);
+        HWND combo = AddCombo(hwnd, IDC_ACTION, 160, 56, 638, 320);
         for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
@@ -911,23 +911,23 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         SendMessageW(combo, CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(kind.c_str()));
 
         AddLabel(hwnd, L"Target", 40, 98, 100, 24, IDC_TARGET_LABEL);
-        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 160, 96, 350, 28);
-        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 528, 96, 110, 28);
-        AddButton(hwnd, IDC_URL_IMPORT, L"Favorites", 528, 96, 110, 28);
+        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 160, 96, 410, 28);
+        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 590, 96, 82, 28);
+        AddButton(hwnd, IDC_URL_IMPORT, L"Start menu", 686, 96, 112, 28);
         AddLabel(hwnd, L"Options", 40, 136, 100, 24, IDC_ARGS_LABEL);
-        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 160, 134, 470, 28);
+        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 160, 134, 638, 28);
 
         AddLabel(hwnd, L"Display", 24, 194, 120, 24);
         AddLabel(hwnd, L"Title", 40, 230, 100, 24);
-        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 160, 228, 470, 28);
+        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 160, 228, 638, 28);
         AddLabel(hwnd, L"Text", 40, 268, 100, 24);
         AddEdit(hwnd, IDC_TEXT, ctx->original.text, 160, 266, 150, 28);
         AddLabel(hwnd, L"Image", 40, 306, 100, 24);
-        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 160, 304, 350, 28);
-        AddButton(hwnd, IDC_BROWSE, L"Browse", 528, 304, 110, 28);
+        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 160, 304, 500, 28);
+        AddButton(hwnd, IDC_BROWSE, L"Browse", 686, 304, 112, 28);
 
-        AddButton(hwnd, IDOK, L"OK", 448, 390, 90, 34, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 548, 390, 90, 34);
+        AddButton(hwnd, IDOK, L"OK", 606, 390, 90, 34, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 708, 390, 90, 34);
         UpdateButtonEditorFields(hwnd);
         return 0;
     }
@@ -1019,7 +1019,7 @@ static void EditButton(int index) {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherButtonEditor", L"Edit Button",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 700, 500,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 860, 500,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
