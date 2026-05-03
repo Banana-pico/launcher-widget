@@ -46,6 +46,7 @@ struct AppConfig {
     int buttonSize = 96;
     int gap = 10;
     bool alwaysOnTop = true;
+    bool showTrayIcon = false;
     std::map<int, std::wstring> pageNames;
     std::map<int, std::vector<ButtonConfig>> pages;
 };
@@ -85,16 +86,25 @@ static constexpr int IDM_SETTINGS = 1003;
 static constexpr int IDM_ALWAYS_ON_TOP = 1004;
 static constexpr int IDM_EXIT = 1005;
 static constexpr int IDM_PAGE_SETTINGS = 1006;
+static constexpr int IDM_RESTORE = 1007;
 static constexpr int IDM_EDIT_BASE = 2000;
+static constexpr UINT WM_TRAYICON = WM_APP + 1;
 
 static constexpr int HEADER_HEIGHT = 40;
 static constexpr int HEADER_BUTTON_SIZE = 30;
 static constexpr int HEADER_BUTTON_GAP = 8;
 static constexpr BYTE WINDOW_OPACITY = 232;
-static constexpr COLORREF DIALOG_BG = RGB(250, 251, 253);
+static constexpr COLORREF DIALOG_BG = RGB(30, 34, 40);
+static constexpr COLORREF DIALOG_TEXT = RGB(238, 242, 247);
+static constexpr COLORREF DIALOG_FIELD_BG = RGB(42, 48, 57);
 
 static HBRUSH DialogBrush() {
     static HBRUSH brush = CreateSolidBrush(DIALOG_BG);
+    return brush;
+}
+
+static HBRUSH DialogFieldBrush() {
+    static HBRUSH brush = CreateSolidBrush(DIALOG_FIELD_BG);
     return brush;
 }
 
@@ -115,6 +125,7 @@ static constexpr int IDC_BUTTON_SIZE = 3103;
 static constexpr int IDC_GAP = 3104;
 static constexpr int IDC_TOPMOST = 3105;
 static constexpr int IDC_PAGE_NAME = 3106;
+static constexpr int IDC_TRAY_ICON = 3107;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -209,6 +220,7 @@ static void LoadConfig() {
     g.config.buttonSize = GetPrivateProfileIntW(L"Window", L"ButtonSize", 96, g.configPath.c_str());
     g.config.gap = GetPrivateProfileIntW(L"Window", L"Gap", 10, g.configPath.c_str());
     g.config.alwaysOnTop = GetPrivateProfileIntW(L"Window", L"AlwaysOnTop", 1, g.configPath.c_str()) != 0;
+    g.config.showTrayIcon = GetPrivateProfileIntW(L"Window", L"ShowTrayIcon", 0, g.configPath.c_str()) != 0;
     int uiVersion = GetPrivateProfileIntW(L"Window", L"UiVersion", 0, g.configPath.c_str());
     if (uiVersion < 2) {
         if (g.config.buttonSize <= 78) g.config.buttonSize = 104;
@@ -249,6 +261,7 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"ButtonSize", std::to_wstring(g.config.buttonSize).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"Gap", std::to_wstring(g.config.gap).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"ShowTrayIcon", g.config.showTrayIcon ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"UiVersion", L"2", g.configPath.c_str());
 
     for (const auto& pageName : g.config.pageNames) {
@@ -288,6 +301,24 @@ static RECT HeaderButtonRect(int slotFromRight) {
     GetClientRect(g.hwnd, &client);
     const int right = client.right - HEADER_BUTTON_GAP - slotFromRight * (HEADER_BUTTON_SIZE + HEADER_BUTTON_GAP);
     return RECT{ right - HEADER_BUTTON_SIZE, 4, right, 4 + HEADER_BUTTON_SIZE };
+}
+
+static RECT HeaderPageButtonRect(bool next) {
+    RECT client{};
+    GetClientRect(g.hwnd, &client);
+    const LONG center = (client.right - client.left) / 2;
+    const LONG titleHalfWidth = std::min<LONG>(120, std::max<LONG>(54, (client.right - 240) / 2));
+    const int x = next ? center + titleHalfWidth + HEADER_BUTTON_GAP :
+        center - titleHalfWidth - HEADER_BUTTON_GAP - HEADER_BUTTON_SIZE;
+    return RECT{ x, 4, x + HEADER_BUTTON_SIZE, 4 + HEADER_BUTTON_SIZE };
+}
+
+static RECT HeaderTitleRect() {
+    RECT client{};
+    GetClientRect(g.hwnd, &client);
+    RECT prevRect = HeaderPageButtonRect(false);
+    RECT nextRect = HeaderPageButtonRect(true);
+    return RECT{ prevRect.right + HEADER_BUTTON_GAP, 0, nextRect.left - HEADER_BUTTON_GAP, HEADER_HEIGHT };
 }
 
 static int HitButton(POINT pt) {
@@ -377,12 +408,13 @@ static void Paint(HDC hdc) {
     DeleteObject(bg);
     DeleteObject(border);
 
-    RECT prevRect = HeaderButtonRect(3);
-    RECT nextRect = HeaderButtonRect(2);
-    RECT settingsRect = HeaderButtonRect(1);
+    RECT prevRect = HeaderPageButtonRect(false);
+    RECT nextRect = HeaderPageButtonRect(true);
+    RECT pageTitleRect = HeaderTitleRect();
+    RECT settingsRect = HeaderButtonRect(2);
+    RECT minimizeRect = HeaderButtonRect(1);
     RECT closeRect = HeaderButtonRect(0);
-    RECT headerTitleRect{ 10, 0, std::max<LONG>(10, prevRect.left - HEADER_BUTTON_GAP), HEADER_HEIGHT };
-    DrawCenteredText(hdc, headerTitleRect, PageName(g.currentPage), 9, true);
+    DrawCenteredText(hdc, pageTitleRect, PageName(g.currentPage), 9, true);
 
     HBRUSH controlBrush = CreateSolidBrush(RGB(37, 43, 52));
     HPEN controlPen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
@@ -391,6 +423,7 @@ static void Paint(HDC hdc) {
     RoundRect(hdc, prevRect.left, prevRect.top, prevRect.right, prevRect.bottom, 6, 6);
     RoundRect(hdc, nextRect.left, nextRect.top, nextRect.right, nextRect.bottom, 6, 6);
     RoundRect(hdc, settingsRect.left, settingsRect.top, settingsRect.right, settingsRect.bottom, 6, 6);
+    RoundRect(hdc, minimizeRect.left, minimizeRect.top, minimizeRect.right, minimizeRect.bottom, 6, 6);
     RoundRect(hdc, closeRect.left, closeRect.top, closeRect.right, closeRect.bottom, 6, 6);
     SelectObject(hdc, oldControlBrush);
     SelectObject(hdc, oldControlPen);
@@ -399,6 +432,7 @@ static void Paint(HDC hdc) {
     DrawCenteredText(hdc, prevRect, L"<", 10, true);
     DrawCenteredText(hdc, nextRect, L">", 10, true);
     DrawCenteredText(hdc, settingsRect, L"SET", 7, true);
+    DrawCenteredText(hdc, minimizeRect, L"_", 11, true);
     DrawCenteredText(hdc, closeRect, L"X", 10, true);
 
     auto& buttons = CurrentButtons();
@@ -593,8 +627,29 @@ static HWND AddCombo(HWND parent, int id, int x, int y, int w, int h) {
 static LRESULT DialogControlColor(WPARAM wp) {
     HDC hdc = reinterpret_cast<HDC>(wp);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(22, 25, 30));
+    SetTextColor(hdc, DIALOG_TEXT);
     return reinterpret_cast<LRESULT>(DialogBrush());
+}
+
+static LRESULT DialogFieldColor(WPARAM wp) {
+    HDC hdc = reinterpret_cast<HDC>(wp);
+    SetBkMode(hdc, OPAQUE);
+    SetBkColor(hdc, DIALOG_FIELD_BG);
+    SetTextColor(hdc, DIALOG_TEXT);
+    return reinterpret_cast<LRESULT>(DialogFieldBrush());
+}
+
+static void ApplyDialogDarkMode(HWND hwnd) {
+    HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+    if (!dwm) return;
+    using DwmSetWindowAttributeProc = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    auto setAttr = reinterpret_cast<DwmSetWindowAttributeProc>(GetProcAddress(dwm, "DwmSetWindowAttribute"));
+    if (setAttr) {
+        BOOL enabled = TRUE;
+        setAttr(hwnd, 20, &enabled, sizeof(enabled));
+        setAttr(hwnd, 19, &enabled, sizeof(enabled));
+    }
+    FreeLibrary(dwm);
 }
 
 static void PlaceDialogNearApp(HWND dialog) {
@@ -620,6 +675,56 @@ static void PlaceDialogNearApp(HWND dialog) {
     if (y < work.top) y = work.top;
 
     SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void UpdateTrayIcon(bool add) {
+    if (!g.hwnd) return;
+
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = g.hwnd;
+    nid.uID = 1;
+
+    if (!add) {
+        Shell_NotifyIconW(NIM_DELETE, &nid);
+        return;
+    }
+
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    nid.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wcscpy_s(nid.szTip, L"Launcher Widget");
+    Shell_NotifyIconW(NIM_ADD, &nid);
+}
+
+static void ApplyTrayIconSetting() {
+    UpdateTrayIcon(g.config.showTrayIcon);
+}
+
+static void RestoreMainWindow() {
+    ShowWindow(g.hwnd, SW_SHOWNORMAL);
+    SetForegroundWindow(g.hwnd);
+}
+
+static void MinimizeMainWindow() {
+    if (g.config.showTrayIcon) {
+        ShowWindow(g.hwnd, SW_HIDE);
+    } else {
+        ShowWindow(g.hwnd, SW_MINIMIZE);
+    }
+}
+
+static void ShowTrayMenu() {
+    POINT pt{};
+    GetCursorPos(&pt);
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, IDM_RESTORE, L"Show");
+    AppendMenuW(menu, MF_STRING, IDM_SETTINGS, L"Settings");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IDM_EXIT, L"Exit");
+    SetForegroundWindow(g.hwnd);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g.hwnd, nullptr);
+    DestroyMenu(menu);
 }
 
 struct FavoriteLink {
@@ -890,20 +995,20 @@ static void UpdateButtonEditorFields(HWND hwnd) {
         kind == L"Windows Settings" ? L"Choose" : L"Favorites");
 
     if (kind == L"App (.exe)") {
-        MoveWindow(target, 170, 110, 470, 30, TRUE);
-        MoveWindow(browse, 658, 110, 82, 30, TRUE);
-        MoveWindow(import, 752, 110, 112, 30, TRUE);
+        MoveWindow(target, 220, 118, 500, 34, TRUE);
+        MoveWindow(browse, 740, 118, 86, 34, TRUE);
+        MoveWindow(import, 842, 118, 116, 34, TRUE);
     } else if (kind == L"URL") {
-        MoveWindow(target, 170, 110, 532, 30, TRUE);
-        MoveWindow(import, 752, 110, 112, 30, TRUE);
+        MoveWindow(target, 220, 118, 588, 34, TRUE);
+        MoveWindow(import, 842, 118, 116, 34, TRUE);
     } else if (kind == L"Windows Settings") {
-        MoveWindow(target, 170, 110, 532, 30, TRUE);
-        MoveWindow(import, 752, 110, 112, 30, TRUE);
+        MoveWindow(target, 220, 118, 588, 34, TRUE);
+        MoveWindow(import, 842, 118, 116, 34, TRUE);
     } else if (kind == L"File" || kind == L"Folder") {
-        MoveWindow(target, 170, 110, 532, 30, TRUE);
-        MoveWindow(browse, 752, 110, 112, 30, TRUE);
+        MoveWindow(target, 220, 118, 588, 34, TRUE);
+        MoveWindow(browse, 842, 118, 116, 34, TRUE);
     } else {
-        MoveWindow(target, 170, 110, 660, 30, TRUE);
+        MoveWindow(target, 220, 118, 700, 34, TRUE);
     }
 
     SetVisible(targetLabel, needsTarget);
@@ -1071,33 +1176,33 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<ButtonEditorContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Action", 28, 24, 140, 24);
-        AddLabel(hwnd, L"Type", 44, 64, 110, 24);
-        HWND combo = AddCombo(hwnd, IDC_ACTION, 170, 62, 660, 320);
+        AddLabel(hwnd, L"Action", 32, 28, 180, 28);
+        AddLabel(hwnd, L"Type", 56, 74, 140, 28);
+        HWND combo = AddCombo(hwnd, IDC_ACTION, 220, 70, 700, 340);
         for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Volume Up", L"Volume Down", L"Mute", L"Play/Pause", L"Next Track", L"Previous Track", L"Stop Media", L"Screenshot", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
         SendMessageW(combo, CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(kind.c_str()));
 
-        AddLabel(hwnd, L"Target", 44, 112, 110, 24, IDC_TARGET_LABEL);
-        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 170, 110, 470, 30);
-        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 658, 110, 82, 30);
-        AddButton(hwnd, IDC_URL_IMPORT, L"Start menu", 752, 110, 112, 30);
-        AddLabel(hwnd, L"Options", 44, 154, 110, 24, IDC_ARGS_LABEL);
-        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 170, 152, 660, 30);
+        AddLabel(hwnd, L"Target", 56, 122, 140, 28, IDC_TARGET_LABEL);
+        AddEdit(hwnd, IDC_TARGET, ctx->original.action.target, 220, 118, 500, 34);
+        AddButton(hwnd, IDC_TARGET_BROWSE, L"Select", 740, 118, 86, 34);
+        AddButton(hwnd, IDC_URL_IMPORT, L"Start menu", 842, 118, 116, 34);
+        AddLabel(hwnd, L"Options", 56, 170, 140, 28, IDC_ARGS_LABEL);
+        AddEdit(hwnd, IDC_ARGS, ctx->original.action.args, 220, 166, 700, 34);
 
-        AddLabel(hwnd, L"Display", 28, 228, 140, 24);
-        AddLabel(hwnd, L"Title", 44, 268, 110, 24);
-        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 170, 266, 660, 30);
-        AddLabel(hwnd, L"Text", 44, 310, 110, 24);
-        AddEdit(hwnd, IDC_TEXT, ctx->original.text, 170, 308, 180, 30);
-        AddLabel(hwnd, L"Image", 44, 352, 110, 24);
-        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 170, 350, 532, 30);
-        AddButton(hwnd, IDC_BROWSE, L"Browse", 752, 350, 112, 30);
+        AddLabel(hwnd, L"Display", 32, 254, 180, 28);
+        AddLabel(hwnd, L"Title", 56, 300, 140, 28);
+        AddEdit(hwnd, IDC_TITLE, ctx->original.title, 220, 296, 700, 34);
+        AddLabel(hwnd, L"Text", 56, 348, 140, 28);
+        AddEdit(hwnd, IDC_TEXT, ctx->original.text, 220, 344, 210, 34);
+        AddLabel(hwnd, L"Image", 56, 396, 140, 28);
+        AddEdit(hwnd, IDC_IMAGE, ctx->original.imagePath, 220, 392, 588, 34);
+        AddButton(hwnd, IDC_BROWSE, L"Browse", 842, 392, 116, 34);
 
-        AddButton(hwnd, IDOK, L"OK", 672, 456, 90, 34, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 774, 456, 90, 34);
+        AddButton(hwnd, IDOK, L"OK", 754, 522, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 862, 522, 96, 38);
         UpdateButtonEditorFields(hwnd);
         return 0;
     }
@@ -1160,6 +1265,9 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1167,6 +1275,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 static void RunOwnedModal(HWND dialog) {
     EnableWindow(g.hwnd, FALSE);
     PlaceDialogNearApp(dialog);
+    ApplyDialogDarkMode(dialog);
     ShowWindow(dialog, SW_SHOW);
     MSG msg{};
     while (IsWindow(dialog) && GetMessageW(&msg, nullptr, 0, 0)) {
@@ -1196,7 +1305,7 @@ static void EditButton(int index) {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherButtonEditor", L"Edit Button",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 910, 550,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 1010, 650,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
@@ -1217,19 +1326,21 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<SettingsEditorContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Layout", 28, 24, 140, 24);
-        AddLabel(hwnd, L"Rows", 44, 70, 130, 24);
-        AddEdit(hwnd, IDC_ROWS, std::to_wstring(ctx->original.rows), 190, 68, 140, 30);
-        AddLabel(hwnd, L"Columns", 44, 112, 130, 24);
-        AddEdit(hwnd, IDC_COLS, std::to_wstring(ctx->original.cols), 190, 110, 140, 30);
-        AddLabel(hwnd, L"Button size", 44, 154, 130, 24);
-        AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 190, 152, 140, 30);
-        AddLabel(hwnd, L"Gap", 44, 196, 130, 24);
-        AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 190, 194, 140, 30);
-        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 190, 246, 190, 32, BS_AUTOCHECKBOX);
+        AddLabel(hwnd, L"Layout", 32, 28, 180, 28);
+        AddLabel(hwnd, L"Rows", 56, 78, 150, 28);
+        AddEdit(hwnd, IDC_ROWS, std::to_wstring(ctx->original.rows), 230, 74, 160, 34);
+        AddLabel(hwnd, L"Columns", 56, 126, 150, 28);
+        AddEdit(hwnd, IDC_COLS, std::to_wstring(ctx->original.cols), 230, 122, 160, 34);
+        AddLabel(hwnd, L"Button size", 56, 174, 150, 28);
+        AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 230, 170, 160, 34);
+        AddLabel(hwnd, L"Gap", 56, 222, 150, 28);
+        AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 230, 218, 160, 34);
+        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 230, 278, 260, 36, BS_AUTOCHECKBOX);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDOK, L"OK", 270, 316, 88, 34, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 370, 316, 92, 34);
+        AddButton(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 322, 260, 36, BS_AUTOCHECKBOX);
+        SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
+        AddButton(hwnd, IDOK, L"OK", 344, 420, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 420, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -1239,6 +1350,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g.config.buttonSize = std::max(64, std::min(220, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_BUTTON_SIZE)).c_str())));
             g.config.gap = std::max(4, std::min(32, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_GAP)).c_str())));
             g.config.alwaysOnTop = SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            g.config.showTrayIcon = SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_GETCHECK, 0, 0) == BST_CHECKED;
             ctx->accepted = true;
             DestroyWindow(hwnd);
             return 0;
@@ -1254,6 +1366,9 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1273,13 +1388,14 @@ static void ShowSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherSettingsEditor", L"Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 500, 400,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 520,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
         CurrentButtons();
         SaveConfig();
         ResizeWindowToGrid();
+        ApplyTrayIconSetting();
         InvalidateRect(g.hwnd, nullptr, TRUE);
     }
 }
@@ -1296,11 +1412,11 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<PageSettingsContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Page", 28, 24, 140, 24);
-        AddLabel(hwnd, L"Name", 44, 70, 130, 24);
-        AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 170, 68, 260, 30);
-        AddButton(hwnd, IDOK, L"OK", 240, 136, 88, 34, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 338, 136, 92, 34);
+        AddLabel(hwnd, L"Page", 32, 28, 180, 28);
+        AddLabel(hwnd, L"Name", 56, 78, 150, 28);
+        AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 220, 74, 330, 34);
+        AddButton(hwnd, IDOK, L"OK", 338, 152, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 152, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -1321,6 +1437,9 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
         return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1340,7 +1459,7 @@ static void ShowPageSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherPageSettingsEditor", L"Page Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 480, 230,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 590, 270,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
@@ -1368,6 +1487,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE:
         g.hwnd = hwnd;
         ResizeWindowToGrid();
+        ApplyTrayIconSetting();
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
@@ -1378,9 +1498,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_LBUTTONDOWN: {
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        RECT prevRect = HeaderButtonRect(3);
-        RECT nextRect = HeaderButtonRect(2);
-        RECT settingsRect = HeaderButtonRect(1);
+        RECT prevRect = HeaderPageButtonRect(false);
+        RECT nextRect = HeaderPageButtonRect(true);
+        RECT settingsRect = HeaderButtonRect(2);
+        RECT minimizeRect = HeaderButtonRect(1);
         RECT closeRect = HeaderButtonRect(0);
         if (PtInRect(&prevRect, pt)) {
             if (g.currentPage > 0) --g.currentPage;
@@ -1395,6 +1516,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (PtInRect(&settingsRect, pt)) {
             ShowSettingsDialog();
+            return 0;
+        }
+        if (PtInRect(&minimizeRect, pt)) {
+            MinimizeMainWindow();
             return 0;
         }
         if (PtInRect(&closeRect, pt)) {
@@ -1421,9 +1546,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ShowContextMenu(pt, index);
         return 0;
     }
+    case WM_SIZE:
+        if (wp == SIZE_MINIMIZED && g.config.showTrayIcon) {
+            ShowWindow(hwnd, SW_HIDE);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    case WM_TRAYICON:
+        if (lp == WM_LBUTTONDBLCLK) {
+            RestoreMainWindow();
+            return 0;
+        }
+        if (lp == WM_RBUTTONUP) {
+            ShowTrayMenu();
+            return 0;
+        }
+        return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
         if (id >= IDM_EDIT_BASE && id < IDM_EDIT_BASE + 256) EditButton(id - IDM_EDIT_BASE);
+        else if (id == IDM_RESTORE) RestoreMainWindow();
         else if (id == IDM_PAGE_PREV && g.currentPage > 0) { --g.currentPage; InvalidateRect(hwnd, nullptr, TRUE); }
         else if (id == IDM_PAGE_NEXT) { ++g.currentPage; CurrentButtons(); InvalidateRect(hwnd, nullptr, TRUE); }
         else if (id == IDM_PAGE_SETTINGS) ShowPageSettingsDialog();
@@ -1439,6 +1581,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         DestroyWindow(hwnd);
         return 0;
     case WM_DESTROY:
+        UpdateTrayIcon(false);
         SaveConfig();
         PostQuitMessage(0);
         return 0;
