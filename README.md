@@ -44,7 +44,9 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `URL`: URL を直接入力できます。`Favorites` から Windows Favorites、Microsoft Edge、Google Chrome のブックマーク候補を取り込めます。お気に入りから取り込んだ場合はタイトル候補も反映されます。
 - `File`: `Select` から任意のファイルを選択できます。
 - `Folder`: `Select` からフォルダーを選択できます。
-- `Windows Settings`: `ms-settings:` などの Windows 設定 URI を入力します。
+- `Windows Settings`: `Choose` から表示、サウンド、ネットワーク、Windows Update などの設定先を選択できます。`ms-settings:` などの Windows 設定 URI を直接入力することもできます。
+- `Volume Up` / `Volume Down` / `Mute`: 音量操作を実行します。
+- `Screenshot`: Print Screen キーを送信します。
 - `Command`: コマンドと引数を分けて入力します。
 - `Keys`: `CTRL+ALT+T` のようなキー同時押しを入力します。
 - `None`: 何もしないボタンにします。

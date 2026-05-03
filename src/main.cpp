@@ -403,6 +403,10 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"ALT") return VK_MENU;
     if (token == L"SHIFT") return VK_SHIFT;
     if (token == L"WIN" || token == L"WINDOWS") return VK_LWIN;
+    if (token == L"VOLUMEUP" || token == L"VOLUME_UP") return VK_VOLUME_UP;
+    if (token == L"VOLUMEDOWN" || token == L"VOLUME_DOWN") return VK_VOLUME_DOWN;
+    if (token == L"MUTE" || token == L"VOLUMEMUTE" || token == L"VOLUME_MUTE") return VK_VOLUME_MUTE;
+    if (token == L"SCREENSHOT" || token == L"PRINTSCREEN" || token == L"PRTSC") return VK_SNAPSHOT;
     if (token.size() == 1) return VkKeyScanW(token[0]) & 0xff;
     if (token.size() > 1 && token[0] == L'F') {
         int n = _wtoi(token.c_str() + 1);
@@ -741,12 +745,30 @@ static std::wstring ComboText(HWND combo) {
     return text;
 }
 
+static bool IsSystemKeyKind(const std::wstring& kind) {
+    return kind == L"Volume Up" || kind == L"Volume Down" || kind == L"Mute" || kind == L"Screenshot";
+}
+
+static std::wstring SystemKeyTarget(const std::wstring& kind) {
+    if (kind == L"Volume Up") return L"VOLUME_UP";
+    if (kind == L"Volume Down") return L"VOLUME_DOWN";
+    if (kind == L"Mute") return L"VOLUME_MUTE";
+    if (kind == L"Screenshot") return L"PRINTSCREEN";
+    return L"";
+}
+
 static std::wstring ActionKindForButton(const ButtonConfig& button) {
     const Action& action = button.action;
     if (action.type == ActionType::None) return L"None";
     if (action.type == ActionType::Settings) return L"Windows Settings";
     if (action.type == ActionType::Command) return L"Command";
-    if (action.type == ActionType::Keys) return L"Keys";
+    if (action.type == ActionType::Keys) {
+        if (action.target == L"VOLUME_UP") return L"Volume Up";
+        if (action.target == L"VOLUME_DOWN") return L"Volume Down";
+        if (action.target == L"VOLUME_MUTE") return L"Mute";
+        if (action.target == L"PRINTSCREEN") return L"Screenshot";
+        return L"Keys";
+    }
     if (action.target.rfind(L"http://", 0) == 0 || action.target.rfind(L"https://", 0) == 0) return L"URL";
     if (PathIsDirectoryW(action.target.c_str())) return L"Folder";
     if (_wcsicmp(PathFindExtensionW(action.target.c_str()), L".exe") == 0) return L"App (.exe)";
@@ -766,26 +788,30 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     HWND browse = GetDlgItem(hwnd, IDC_TARGET_BROWSE);
     HWND import = GetDlgItem(hwnd, IDC_URL_IMPORT);
 
-    bool needsTarget = kind != L"None";
+    bool needsTarget = kind != L"None" && !IsSystemKeyKind(kind);
     bool needsArgs = kind == L"App (.exe)" || kind == L"File" || kind == L"Command";
     bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder";
-    bool canImport = kind == L"URL" || kind == L"App (.exe)";
+    bool canImport = kind == L"URL" || kind == L"App (.exe)" || kind == L"Windows Settings";
 
     SetWindowTextW(targetLabel, kind == L"URL" ? L"URL" :
         kind == L"Keys" ? L"Key chord" :
-        kind == L"Windows Settings" ? L"Settings URI" :
+        kind == L"Windows Settings" ? L"Settings" :
         kind == L"Command" ? L"Command" :
         kind == L"Folder" ? L"Folder" :
         kind == L"File" ? L"File" : L"Target");
     SetWindowTextW(argsLabel, kind == L"Command" ? L"Arguments" : L"Options");
     SetWindowTextW(browse, kind == L"Folder" ? L"Folder" : L"Select");
-    SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" : L"Favorites");
+    SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" :
+        kind == L"Windows Settings" ? L"Choose" : L"Favorites");
 
     if (kind == L"App (.exe)") {
         MoveWindow(target, 160, 96, 410, 28, TRUE);
         MoveWindow(browse, 590, 96, 82, 28, TRUE);
         MoveWindow(import, 686, 96, 112, 28, TRUE);
     } else if (kind == L"URL") {
+        MoveWindow(target, 160, 96, 500, 28, TRUE);
+        MoveWindow(import, 686, 96, 112, 28, TRUE);
+    } else if (kind == L"Windows Settings") {
         MoveWindow(target, 160, 96, 500, 28, TRUE);
         MoveWindow(import, 686, 96, 112, 28, TRUE);
     } else if (kind == L"File" || kind == L"Folder") {
@@ -871,18 +897,73 @@ static void ImportStartMenuApp(HWND hwnd) {
     }
 }
 
+struct SettingsPreset {
+    const wchar_t* title;
+    const wchar_t* uri;
+    const wchar_t* badge;
+};
+
+static const SettingsPreset kSettingsPresets[] = {
+    { L"Home", L"ms-settings:", L"SET" },
+    { L"Display", L"ms-settings:display", L"DIS" },
+    { L"Sound", L"ms-settings:sound", L"SND" },
+    { L"Bluetooth & devices", L"ms-settings:bluetooth", L"BT" },
+    { L"Network & internet", L"ms-settings:network", L"NET" },
+    { L"Wi-Fi", L"ms-settings:network-wifi", L"WIFI" },
+    { L"Apps", L"ms-settings:appsfeatures", L"APP" },
+    { L"Default apps", L"ms-settings:defaultapps", L"DEF" },
+    { L"Accounts", L"ms-settings:yourinfo", L"ACC" },
+    { L"Time & language", L"ms-settings:dateandtime", L"TIME" },
+    { L"Personalization", L"ms-settings:personalization", L"PRS" },
+    { L"Windows Update", L"ms-settings:windowsupdate", L"UPD" },
+    { L"Privacy & security", L"ms-settings:privacy", L"SEC" },
+    { L"Storage", L"ms-settings:storagesense", L"STO" },
+    { L"Power & battery", L"ms-settings:powersleep", L"PWR" }
+};
+
+static void ChooseWindowsSetting(HWND hwnd) {
+    HMENU menu = CreatePopupMenu();
+    const int count = static_cast<int>(sizeof(kSettingsPresets) / sizeof(kSettingsPresets[0]));
+    for (int i = 0; i < count; ++i) {
+        AppendMenuW(menu, MF_STRING, 7000 + i, kSettingsPresets[i].title);
+    }
+    RECT rc{};
+    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
+    DestroyMenu(menu);
+    if (cmd >= 7000 && cmd < 7000 + count) {
+        const SettingsPreset& preset = kSettingsPresets[cmd - 7000];
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), preset.uri);
+        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
+        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
+    }
+}
+
 static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
     HWND titleCtrl = GetDlgItem(hwnd, IDC_TITLE);
     HWND textCtrl = GetDlgItem(hwnd, IDC_TEXT);
     HWND targetCtrl = GetDlgItem(hwnd, IDC_TARGET);
     std::wstring target = GetWindowTextString(targetCtrl);
-    if (target.empty()) return;
 
-    if (kind == L"URL") {
+    if (IsSystemKeyKind(kind)) {
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, kind.c_str());
+        if (GetWindowTextLengthW(textCtrl) == 0) {
+            std::wstring badge = kind == L"Volume Up" ? L"VOL+" :
+                kind == L"Volume Down" ? L"VOL-" :
+                kind == L"Mute" ? L"MUTE" : L"SS";
+            SetWindowTextW(textCtrl, badge.c_str());
+        }
+    } else if (kind == L"URL") {
+        if (target.empty()) return;
         std::wstring host = HostFromUrl(target);
         if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, host.empty() ? target.c_str() : host.c_str());
         if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"URL");
+    } else if (kind == L"Windows Settings") {
+        if (target.empty()) return;
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, L"Windows Settings");
+        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"SET");
     } else if (kind == L"App (.exe)" || kind == L"File" || kind == L"Folder") {
+        if (target.empty()) return;
         wchar_t name[MAX_PATH]{};
         wcscpy_s(name, PathFindFileNameW(target.c_str()));
         if (kind != L"Folder") PathRemoveExtensionW(name);
@@ -904,7 +985,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Action", 24, 22, 120, 24);
         AddLabel(hwnd, L"Type", 40, 58, 100, 24);
         HWND combo = AddCombo(hwnd, IDC_ACTION, 160, 56, 638, 320);
-        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Command", L"Keys", L"None" }) {
+        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Volume Up", L"Volume Down", L"Mute", L"Screenshot", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
@@ -934,6 +1015,8 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_ACTION && HIWORD(wp) == CBN_SELCHANGE) {
             UpdateButtonEditorFields(hwnd);
+            std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
+            if (IsSystemKeyKind(kind)) FillDisplayDefaults(hwnd, kind);
             return 0;
         }
         if (LOWORD(wp) == IDC_BROWSE) {
@@ -956,6 +1039,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (LOWORD(wp) == IDC_URL_IMPORT) {
             std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
             if (kind == L"App (.exe)") ImportStartMenuApp(hwnd);
+            else if (kind == L"Windows Settings") ChooseWindowsSetting(hwnd);
             else ImportFavoriteUrl(hwnd);
             return 0;
         }
@@ -968,9 +1052,9 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             if (kind == L"None") ctx->target->action.type = ActionType::None;
             else if (kind == L"Windows Settings") ctx->target->action.type = ActionType::Settings;
             else if (kind == L"Command") ctx->target->action.type = ActionType::Command;
-            else if (kind == L"Keys") ctx->target->action.type = ActionType::Keys;
+            else if (kind == L"Keys" || IsSystemKeyKind(kind)) ctx->target->action.type = ActionType::Keys;
             else ctx->target->action.type = ActionType::Open;
-            ctx->target->action.target = GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET));
+            ctx->target->action.target = IsSystemKeyKind(kind) ? SystemKeyTarget(kind) : GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET));
             ctx->target->action.args = GetWindowTextString(GetDlgItem(hwnd, IDC_ARGS));
             ctx->accepted = true;
             DestroyWindow(hwnd);
