@@ -444,6 +444,28 @@ static int HitButton(POINT pt) {
     return -1;
 }
 
+static void UpdateTooltipRects() {
+    if (!g.tooltipHwnd) return;
+    for (int i = 0; i < 256; ++i) {
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.hwnd = g.hwnd;
+        ti.uId = i;
+        SendMessageW(g.tooltipHwnd, TTM_DELTOOLW, 0, (LPARAM)&ti);
+    }
+    int count = g.config.rows * g.config.cols;
+    for (int i = 0; i < count; ++i) {
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_SUBCLASS;
+        ti.hwnd = g.hwnd;
+        ti.uId = i;
+        ti.rect = ButtonRect(i);
+        ti.lpszText = LPSTR_TEXTCALLBACKW;
+        SendMessageW(g.tooltipHwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+    }
+}
+
 static void ResizeWindowToGrid() {
     if (!g.hwnd) return;
     const int width = g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap);
@@ -452,6 +474,7 @@ static void ResizeWindowToGrid() {
         width, height, SWP_NOMOVE | SWP_NOACTIVATE);
     SetWindowRgn(g.hwnd, CreateRoundRectRgn(0, 0, width + 1, height + 1, 18, 18), TRUE);
     SetLayeredWindowAttributes(g.hwnd, 0, WINDOW_OPACITY, LWA_ALPHA);
+    UpdateTooltipRects();
 }
 
 static void RememberWindowPosition() {
@@ -2044,14 +2067,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
             hwnd, nullptr, g.instance, nullptr);
         
-        TOOLINFOW ti{};
-        ti.cbSize = sizeof(ti);
-        ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
-        ti.hwnd = hwnd;
-        ti.uId = 1;
-        ti.lpszText = const_cast<wchar_t*>(L"");
-        SendMessageW(g.tooltipHwnd, TTM_ADDTOOLW, 0, (LPARAM)&ti);
-
         ResizeWindowToGrid();
         ApplyTrayIconSetting();
         return 0;
@@ -2115,71 +2130,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ShowContextMenu(pt, index, pageTitle);
         return 0;
     }
-    case WM_MOUSEMOVE: {
-        POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-        int index = HitButton(pt);
-        
-        TRACKMOUSEEVENT tme{ sizeof(tme) };
-        tme.dwFlags = TME_LEAVE;
-        tme.hwndTrack = hwnd;
-        TrackMouseEvent(&tme);
-
-        if (index != g.lastHoveredButton) {
-            g.lastHoveredButton = index;
-            bool show = false;
-            std::wstring tooltipText;
-
-            if (index >= 0) {
-                auto& buttons = CurrentButtons();
-                const ButtonConfig& b = buttons[index];
-                std::wstring title = b.title.empty() ? L"Empty" : b.title;
-                
+    case WM_NOTIFY: {
+        auto* hdr = reinterpret_cast<NMHDR*>(lp);
+        if (hdr->hwndFrom == g.tooltipHwnd && hdr->code == TTN_GETDISPINFOW) {
+            auto* di = reinterpret_cast<NMTTDISPINFOW*>(lp);
+            int index = static_cast<int>(di->hdr.idFrom);
+            auto& buttons = CurrentButtons();
+            if (index >= 0 && index < static_cast<int>(buttons.size())) {
+                std::wstring title = buttons[index].title.empty() ? L"Empty" : buttons[index].title;
                 RECT r = ButtonRect(index);
                 RECT titleRect = r;
                 titleRect.top = r.bottom - 24;
                 titleRect.left += 6;
                 titleRect.right -= 6;
-
                 HDC hdc = GetDC(hwnd);
-                if (IsTextTruncated(hdc, title, titleRect, 9, false)) {
-                    tooltipText = title;
-                    show = true;
-                }
+                bool truncated = IsTextTruncated(hdc, title, titleRect, 9, false);
                 ReleaseDC(hwnd, hdc);
+                if (truncated) {
+                    static std::wstring s_tooltipCache;
+                    s_tooltipCache = title;
+                    di->lpszText = const_cast<wchar_t*>(s_tooltipCache.c_str());
+                } else {
+                    di->lpszText = const_cast<wchar_t*>(L"");
+                }
             }
-
-            TOOLINFOW ti{};
-            ti.cbSize = sizeof(ti);
-            ti.hwnd = hwnd;
-            ti.uId = 1;
-            
-            if (show) {
-                ti.lpszText = const_cast<wchar_t*>(tooltipText.c_str());
-                SendMessageW(g.tooltipHwnd, TTM_UPDATETIPTEXTW, 0, (LPARAM)&ti);
-                
-                POINT screenPt = pt;
-                ClientToScreen(hwnd, &screenPt);
-                SendMessageW(g.tooltipHwnd, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 10));
-                SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
-            } else {
-                SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
-            }
-        } else if (index >= 0) {
-            // Update position if still hovering
-            POINT screenPt = pt;
-            ClientToScreen(hwnd, &screenPt);
-            SendMessageW(g.tooltipHwnd, TTM_TRACKPOSITION, 0, MAKELPARAM(screenPt.x + 10, screenPt.y + 10));
         }
-        return 0;
-    }
-    case WM_MOUSELEAVE: {
-        g.lastHoveredButton = -1;
-        TOOLINFOW ti{};
-        ti.cbSize = sizeof(ti);
-        ti.hwnd = hwnd;
-        ti.uId = 1;
-        SendMessageW(g.tooltipHwnd, TTM_TRACKACTIVATE, FALSE, (LPARAM)&ti);
-        return 0;
+        return DefWindowProcW(hwnd, msg, wp, lp);
     }
     case WM_SIZE:
         if (wp == SIZE_MINIMIZED && g.config.showTrayIcon) {
