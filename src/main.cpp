@@ -1017,6 +1017,7 @@ struct AppCandidate {
     std::wstring title;
     std::wstring target;
     std::wstring args;
+    std::wstring iconPath;
 };
 
 static bool IsWebUrl(const std::wstring& value) {
@@ -1120,7 +1121,7 @@ static void CollectChromiumBookmarks(const std::wstring& path, std::vector<Favor
     }
 }
 
-static bool ResolveShortcutTarget(const std::wstring& shortcutPath, std::wstring& target, std::wstring& args) {
+static bool ResolveShortcutTarget(const std::wstring& shortcutPath, std::wstring& target, std::wstring& args, std::wstring& iconPath) {
     IShellLinkW* link = nullptr;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) return false;
     IPersistFile* file = nullptr;
@@ -1135,6 +1136,11 @@ static bool ResolveShortcutTarget(const std::wstring& shortcutPath, std::wstring
             wchar_t argsBuf[INFOTIPSIZE]{};
             if (SUCCEEDED(link->GetArguments(argsBuf, INFOTIPSIZE)) && argsBuf[0]) {
                 args = argsBuf;
+            }
+            wchar_t iconBuf[MAX_PATH]{};
+            int iconIndex = 0;
+            if (SUCCEEDED(link->GetIconLocation(iconBuf, MAX_PATH, &iconIndex)) && iconBuf[0]) {
+                iconPath = iconBuf;
             }
         }
         file->Release();
@@ -1154,13 +1160,13 @@ static void CollectStartMenuShortcuts(const std::wstring& dir, std::vector<AppCa
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             CollectStartMenuShortcuts(path, apps);
         } else if (_wcsicmp(PathFindExtensionW(path.c_str()), L".lnk") == 0) {
-            std::wstring target, args;
-            if (ResolveShortcutTarget(path, target, args)) {
+            std::wstring target, args, iconPath;
+            if (ResolveShortcutTarget(path, target, args, iconPath)) {
                 if (_wcsicmp(PathFindExtensionW(target.c_str()), L".exe") == 0) {
                     wchar_t title[MAX_PATH]{};
                     wcscpy_s(title, fd.cFileName);
                     PathRemoveExtensionW(title);
-                    apps.push_back({ title, target, args });
+                    apps.push_back({ title, target, args, iconPath });
                 }
             }
         }
@@ -1183,6 +1189,20 @@ static std::vector<AppCandidate> LoadStartMenuApps() {
     std::sort(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
         return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
     });
+    for (size_t i = 0; i < apps.size(); ) {
+        size_t j = i + 1;
+        while (j < apps.size() && _wcsicmp(apps[i].title.c_str(), apps[j].title.c_str()) == 0) {
+            j++;
+        }
+        if (j - i > 1) {
+            for (size_t k = i; k < j; ++k) {
+                if (apps[k].target.find(L"Brave") != std::wstring::npos) apps[k].title += L" (Brave)";
+                else if (apps[k].target.find(L"Edge") != std::wstring::npos) apps[k].title += L" (Edge)";
+                else if (apps[k].target.find(L"Chrome") != std::wstring::npos) apps[k].title += L" (Chrome)";
+            }
+        }
+        i = j;
+    }
     apps.erase(std::unique(apps.begin(), apps.end(), [](const AppCandidate& a, const AppCandidate& b) {
         return _wcsicmp(a.target.c_str(), b.target.c_str()) == 0 && wcscmp(a.args.c_str(), b.args.c_str()) == 0;
     }), apps.end());
@@ -1449,6 +1469,9 @@ static void ImportStartMenuApp(HWND hwnd) {
         const AppCandidate& app = ctx.apps[ctx.selectedIndex];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), app.target.c_str());
         SetWindowTextW(GetDlgItem(hwnd, IDC_ARGS), app.args.c_str());
+        if (!app.iconPath.empty() && _wcsicmp(PathFindExtensionW(app.iconPath.c_str()), L".exe") != 0 && _wcsicmp(PathFindExtensionW(app.iconPath.c_str()), L".dll") != 0) {
+            SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), app.iconPath.c_str());
+        }
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), app.title.c_str());
         if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) {
             std::wstring text = TextBadgeFromTitle(app.title, L"APP");
