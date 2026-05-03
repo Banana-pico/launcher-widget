@@ -15,7 +15,6 @@
 #include <cwctype>
 #include <fstream>
 #include <map>
-#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -443,6 +442,7 @@ static void ConfigureImageGraphics(Graphics& graphics) {
     graphics.SetSmoothingMode(SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(PixelOffsetModeHalf);
     graphics.SetCompositingQuality(CompositingQualityHighQuality);
+    graphics.SetCompositingMode(CompositingModeSourceOver);
 }
 
 static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
@@ -457,7 +457,9 @@ static bool DrawCustomImage(HDC hdc, const std::wstring& path, RECT rc) {
     int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 28;
     if (side <= 8) return false;
     Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 10, side, side);
-    graphics.DrawImage(&image, dest);
+    ImageAttributes attrs;
+    attrs.SetWrapMode(WrapModeTileFlipXY);
+    graphics.DrawImage(&image, dest, 0, 0, image.GetWidth(), image.GetHeight(), UnitPixel, &attrs);
     return true;
 }
 
@@ -479,15 +481,7 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     if (!SHGetFileInfoW(target.c_str(), FILE_ATTRIBUTE_NORMAL, &info, sizeof(info), flags)) return false;
     int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
     if (side < 24) side = 24;
-    std::unique_ptr<Bitmap> bitmap(Bitmap::FromHICON(info.hIcon));
-    if (bitmap && bitmap->GetLastStatus() == Ok) {
-        Graphics graphics(hdc);
-        ConfigureImageGraphics(graphics);
-        Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, side, side);
-        graphics.DrawImage(bitmap.get(), dest);
-    } else {
-        DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
-    }
+    DrawIconEx(hdc, rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, info.hIcon, side, side, 0, nullptr, DI_NORMAL);
     DestroyIcon(info.hIcon);
     return true;
 }
