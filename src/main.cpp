@@ -200,6 +200,18 @@ static std::wstring PageName(int page) {
     return DefaultPageName(page);
 }
 
+static std::wstring FileNameFromPath(std::wstring path, bool removeExtension) {
+    while (!path.empty() && (path.back() == L'\\' || path.back() == L'/')) {
+        path.pop_back();
+    }
+    if (path.empty()) return L"";
+
+    wchar_t name[MAX_PATH]{};
+    wcscpy_s(name, PathFindFileNameW(path.c_str()));
+    if (removeExtension) PathRemoveExtensionW(name);
+    return name;
+}
+
 static void EnsureDefaults() {
     auto& buttons = g.config.pages[0];
     if (!buttons.empty()) return;
@@ -486,6 +498,112 @@ static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     return true;
 }
 
+static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
+    if (action.type != ActionType::Keys) return false;
+    const bool volumeUp = action.target == L"VOLUME_UP";
+    const bool volumeDown = action.target == L"VOLUME_DOWN";
+    const bool volumeMute = action.target == L"VOLUME_MUTE";
+    const bool screenshot = action.target == L"PRINTSCREEN";
+    const bool playPause = action.target == L"MEDIA_PLAY_PAUSE";
+    const bool nextTrack = action.target == L"MEDIA_NEXT_TRACK";
+    const bool previousTrack = action.target == L"MEDIA_PREV_TRACK";
+    const bool stopMedia = action.target == L"MEDIA_STOP";
+    if (!volumeUp && !volumeDown && !volumeMute && !screenshot && !playPause && !nextTrack && !previousTrack && !stopMedia) return false;
+
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
+    const int side = std::min(width, height) - 36;
+    if (side < 30) return false;
+
+    const int left = rc.left + (width - side) / 2;
+    const int top = rc.top + 12;
+    const int midY = top + side / 2;
+    const int color = RGB(238, 242, 247);
+
+    HPEN pen = CreatePen(PS_SOLID, 3, color);
+    HBRUSH brush = CreateSolidBrush(color);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+
+    SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+    if (volumeUp || volumeDown || volumeMute) {
+        SelectObject(hdc, brush);
+        RECT box{ left + side / 8, midY - side / 7, left + side / 3, midY + side / 7 };
+        Rectangle(hdc, box.left, box.top, box.right, box.bottom);
+
+        POINT speaker[] = {
+            { left + side / 3, midY - side / 6 },
+            { left + side / 2, top + side / 4 },
+            { left + side / 2, top + side * 3 / 4 },
+            { left + side / 3, midY + side / 6 }
+        };
+        Polygon(hdc, speaker, 4);
+        SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+        if (volumeMute) {
+            MoveToEx(hdc, left + side * 2 / 3, midY - side / 6, nullptr);
+            LineTo(hdc, left + side * 5 / 6, midY + side / 6);
+            MoveToEx(hdc, left + side * 5 / 6, midY - side / 6, nullptr);
+            LineTo(hdc, left + side * 2 / 3, midY + side / 6);
+        } else {
+            Arc(hdc, left + side / 2, top + side / 3, left + side * 4 / 5, top + side * 2 / 3,
+                left + side * 3 / 5, top + side / 3, left + side * 3 / 5, top + side * 2 / 3);
+            if (volumeUp) {
+                Arc(hdc, left + side / 2, top + side / 5, left + side, top + side * 4 / 5,
+                    left + side * 3 / 4, top + side / 5, left + side * 3 / 4, top + side * 4 / 5);
+            } else {
+                MoveToEx(hdc, left + side * 2 / 3, midY, nullptr);
+                LineTo(hdc, left + side * 5 / 6, midY);
+            }
+        }
+    } else if (screenshot) {
+        RoundRect(hdc, left + side / 8, top + side / 4, left + side * 7 / 8, top + side * 3 / 4, 6, 6);
+        Rectangle(hdc, left + side / 3, top + side / 6, left + side * 2 / 3, top + side / 4);
+        Ellipse(hdc, left + side * 3 / 8, top + side * 3 / 8, left + side * 5 / 8, top + side * 5 / 8);
+    } else if (playPause) {
+        SelectObject(hdc, brush);
+        POINT play[] = {
+            { left + side / 5, top + side / 4 },
+            { left + side / 5, top + side * 3 / 4 },
+            { left + side / 2, midY }
+        };
+        Polygon(hdc, play, 3);
+        Rectangle(hdc, left + side * 3 / 5, top + side / 4, left + side * 7 / 10, top + side * 3 / 4);
+        Rectangle(hdc, left + side * 4 / 5, top + side / 4, left + side * 9 / 10, top + side * 3 / 4);
+    } else if (nextTrack || previousTrack) {
+        SelectObject(hdc, brush);
+        const int dir = nextTrack ? 1 : -1;
+        const int baseX = left + side / 2;
+        POINT tri1[] = {
+            { baseX - dir * side / 3, top + side / 4 },
+            { baseX - dir * side / 3, top + side * 3 / 4 },
+            { baseX, midY }
+        };
+        POINT tri2[] = {
+            { baseX, top + side / 4 },
+            { baseX, top + side * 3 / 4 },
+            { baseX + dir * side / 3, midY }
+        };
+        Polygon(hdc, tri1, 3);
+        Polygon(hdc, tri2, 3);
+        if (nextTrack) {
+            Rectangle(hdc, left + side * 5 / 6, top + side / 4, left + side * 11 / 12, top + side * 3 / 4);
+        } else {
+            Rectangle(hdc, left + side / 12, top + side / 4, left + side / 6, top + side * 3 / 4);
+        }
+    } else if (stopMedia) {
+        SelectObject(hdc, brush);
+        Rectangle(hdc, left + side / 3, top + side / 3, left + side * 2 / 3, top + side * 2 / 3);
+    }
+
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+    return true;
+}
+
 static void DrawHeaderControl(HDC hdc, RECT rc) {
     HBRUSH brush = CreateSolidBrush(RGB(37, 43, 52));
     HPEN pen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
@@ -551,6 +669,9 @@ static void Paint(HDC hdc) {
         }
         if (!drew && (b.action.type == ActionType::Open || b.action.type == ActionType::Command)) {
             drew = DrawShellIcon(hdc, b.action.target, r);
+        }
+        if (!drew && b.action.type == ActionType::Keys) {
+            drew = DrawSystemKeyIcon(hdc, b.action, r);
         }
         if (!drew && !b.text.empty()) DrawCenteredText(hdc, iconRect, b.text, 24, false);
 
@@ -1252,10 +1373,8 @@ static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
         if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"SET");
     } else if (kind == L"App (.exe)" || kind == L"File" || kind == L"Folder") {
         if (target.empty()) return;
-        wchar_t name[MAX_PATH]{};
-        wcscpy_s(name, PathFindFileNameW(target.c_str()));
-        if (kind != L"Folder") PathRemoveExtensionW(name);
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, name);
+        std::wstring name = FileNameFromPath(target, kind != L"Folder");
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, name.c_str());
         if (GetWindowTextLengthW(textCtrl) == 0) {
             std::wstring badge = TextBadgeFromTitle(name, kind == L"App (.exe)" ? L"APP" : L"FILE");
             SetWindowTextW(textCtrl, badge.c_str());
