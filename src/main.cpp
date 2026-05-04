@@ -87,9 +87,8 @@ struct AppState {
     int lastHoveredButton = -1;
     std::vector<CachedIcon> currentIcons;
     bool altTabActive = false;
-    std::vector<HWND> altTabCycleWindows;
-    int altTabCycleIndex = -1;
-    DWORD altTabCycleTick = 0;
+    bool pendingAltTabSwitch = false;
+    bool pendingAltTabReverse = false;
 };
 
 static AppState g;
@@ -185,6 +184,7 @@ static constexpr int IDC_KEY_ALTTAB_NEXT = 3209;
 static constexpr int IDC_KEY_ALTTAB_PREV = 3210;
 static constexpr int IDC_KEY_BUTTON_BASE = 6000;
 static constexpr UINT_PTR IDT_ALT_TAB_RELEASE = 4101;
+static constexpr UINT_PTR IDT_ALT_TAB_SEND = 4102;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -1285,68 +1285,6 @@ static void SendVirtualKey(WORD vk, bool keyUp = false) {
     SendInput(1, &in, sizeof(INPUT));
 }
 
-static bool IsTaskSwitchCandidate(HWND hwnd) {
-    if (!hwnd || hwnd == g.hwnd || !IsWindowVisible(hwnd)) return false;
-    if (GetAncestor(hwnd, GA_ROOT) != hwnd) return false;
-    if (GetWindow(hwnd, GW_OWNER)) return false;
-
-    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-    if (exStyle & WS_EX_TOOLWINDOW) return false;
-
-    BOOL cloaked = FALSE;
-    if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) return false;
-
-    wchar_t title[256]{};
-    GetWindowTextW(hwnd, title, 256);
-    if (Trim(title).empty()) return false;
-
-    wchar_t cls[128]{};
-    GetClassNameW(hwnd, cls, 128);
-    if (wcscmp(cls, L"Shell_TrayWnd") == 0 || wcscmp(cls, L"Progman") == 0) return false;
-    return true;
-}
-
-static BOOL CALLBACK CollectTaskSwitchWindows(HWND hwnd, LPARAM lp) {
-    auto* windows = reinterpret_cast<std::vector<HWND>*>(lp);
-    if (IsTaskSwitchCandidate(hwnd)) windows->push_back(hwnd);
-    return TRUE;
-}
-
-static void RebuildTaskSwitchCycle(HWND foreground) {
-    g.altTabCycleWindows.clear();
-    EnumWindows(CollectTaskSwitchWindows, reinterpret_cast<LPARAM>(&g.altTabCycleWindows));
-    g.altTabCycleIndex = -1;
-    for (int i = 0; i < static_cast<int>(g.altTabCycleWindows.size()); ++i) {
-        if (g.altTabCycleWindows[i] == foreground) {
-            g.altTabCycleIndex = i;
-            break;
-        }
-    }
-    if (g.altTabCycleIndex < 0 && !g.altTabCycleWindows.empty()) g.altTabCycleIndex = 0;
-}
-
-static void CycleTaskSwitchWindow(bool reverse) {
-    HWND foreground = GetForegroundWindow();
-    DWORD now = GetTickCount();
-    if (g.altTabCycleWindows.empty() || now - g.altTabCycleTick > 2500 || g.altTabCycleIndex < 0) {
-        RebuildTaskSwitchCycle(foreground);
-    }
-    g.altTabCycleTick = now;
-    const int count = static_cast<int>(g.altTabCycleWindows.size());
-    if (count <= 1) return;
-
-    for (int attempts = 0; attempts < count; ++attempts) {
-        g.altTabCycleIndex = (g.altTabCycleIndex + (reverse ? -1 : 1) + count) % count;
-        HWND target = g.altTabCycleWindows[g.altTabCycleIndex];
-        if (!IsTaskSwitchCandidate(target)) continue;
-        if (IsIconic(target)) ShowWindow(target, SW_RESTORE);
-        SetForegroundWindow(target);
-        return;
-    }
-    g.altTabCycleWindows.clear();
-    g.altTabCycleIndex = -1;
-}
-
 static void ReleaseAltTabHold() {
     if (!g.altTabActive) return;
     KillTimer(g.hwnd, IDT_ALT_TAB_RELEASE);
@@ -1355,8 +1293,15 @@ static void ReleaseAltTabHold() {
 }
 
 static void SendAltTabSwitch(bool reverse) {
-    ReleaseAltTabHold();
-    CycleTaskSwitchWindow(reverse);
+    if (!g.altTabActive) {
+        SendVirtualKey(VK_MENU);
+        g.altTabActive = true;
+    }
+    if (reverse) SendVirtualKey(VK_SHIFT);
+    SendVirtualKey(VK_TAB);
+    SendVirtualKey(VK_TAB, true);
+    if (reverse) SendVirtualKey(VK_SHIFT, true);
+    if (g.hwnd) SetTimer(g.hwnd, IDT_ALT_TAB_RELEASE, 1200, nullptr);
 }
 
 static void SendKeySpec(const std::wstring& spec) {
@@ -1412,6 +1357,24 @@ static void ExecuteAction(const Action& action) {
     default:
         break;
     }
+}
+
+static bool IsAltTabSwitchAction(const Action& action) {
+    return action.type == ActionType::Keys && (action.target == L"ALT_TAB_NEXT" || action.target == L"ALT_TAB_PREV");
+}
+
+static void QueueAltTabSwitch(bool reverse) {
+    g.pendingAltTabSwitch = true;
+    g.pendingAltTabReverse = reverse;
+    SetCapture(g.hwnd);
+}
+
+static void SendQueuedAltTabSwitch() {
+    if (!g.pendingAltTabSwitch) return;
+    bool reverse = g.pendingAltTabReverse;
+    g.pendingAltTabSwitch = false;
+    g.pendingAltTabReverse = false;
+    SendAltTabSwitch(reverse);
 }
 
 static std::wstring BrowseForImage(HWND owner) {
@@ -3044,6 +3007,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ReleaseAltTabHold();
             return 0;
         }
+        if (wp == IDT_ALT_TAB_SEND) {
+            KillTimer(hwnd, IDT_ALT_TAB_SEND);
+            SendQueuedAltTabSwitch();
+            return 0;
+        }
         return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_PAINT: {
         PAINTSTRUCT ps{};
@@ -3082,6 +3050,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int index = HitButton(pt);
         if (index >= 0) {
             auto& buttons = CurrentButtons();
+            if (IsAltTabSwitchAction(buttons[index].action)) {
+                QueueAltTabSwitch(buttons[index].action.target == L"ALT_TAB_PREV");
+                return 0;
+            }
             ExecuteAction(buttons[index].action);
         } else if (pt.y < HEADER_HEIGHT) {
             ReleaseCapture();
@@ -3092,6 +3064,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_LBUTTONUP:
+        if (g.pendingAltTabSwitch) {
+            ReleaseCapture();
+            SetTimer(hwnd, IDT_ALT_TAB_SEND, 10, nullptr);
+            return 0;
+        }
+        return DefWindowProcW(hwnd, msg, wp, lp);
     case WM_RBUTTONUP: {
         POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
         int index = HitButton(pt);
