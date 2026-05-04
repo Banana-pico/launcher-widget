@@ -2402,11 +2402,11 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"106"));
         SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"101"));
         SendMessageW(keyboard, CB_SETCURSEL, ctx->original.keyboardLayout == 101 ? 1 : 0, 0);
-        AddButton(hwnd, IDC_TOPMOST, L"Always on top", 230, 322, 260, 36, BS_AUTOCHECKBOX);
+        AddCheckWithReadableLabel(hwnd, IDC_TOPMOST, L"Always on top", 230, 322, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 366, 260, 36, BS_AUTOCHECKBOX);
+        AddCheckWithReadableLabel(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 366, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 410, 260, 36, BS_AUTOCHECKBOX);
+        AddCheckWithReadableLabel(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 410, 260);
         SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_SETCHECK, IsRunOnStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
         AddButton(hwnd, IDOK, L"OK", 344, 468, 96, 38, BS_DEFPUSHBUTTON);
         AddButton(hwnd, IDCANCEL, L"Cancel", 456, 468, 104, 38);
