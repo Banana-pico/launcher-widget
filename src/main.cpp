@@ -97,6 +97,7 @@ static constexpr int IDM_EXIT = 1005;
 static constexpr int IDM_PAGE_SETTINGS = 1006;
 static constexpr int IDM_RESTORE = 1007;
 static constexpr int IDM_DELETE_PAGE = 1008;
+static constexpr int IDM_ADD_PAGE = 1009;
 static constexpr int IDM_EDIT_BASE = 2000;
 static constexpr int IDM_CLEAR_BASE = 2400;
 static constexpr UINT WM_TRAYICON = WM_APP + 1;
@@ -140,6 +141,7 @@ static constexpr int IDC_TRAY_ICON = 3107;
 static constexpr int IDC_DELETE_PAGE = 3108;
 static constexpr int IDC_CLEAR_BUTTON = 3109;
 static constexpr int IDC_RUN_ON_STARTUP = 3110;
+static constexpr int IDC_ADD_PAGE = 3111;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -360,6 +362,17 @@ static std::vector<int> ExistingPages() {
     std::sort(pages.begin(), pages.end());
     pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
     return pages;
+}
+
+static int AddPage() {
+    std::vector<int> pages = ExistingPages();
+    int newPage = pages.empty() ? 0 : pages.back() + 1;
+    auto& buttons = g.config.pages[newPage];
+    buttons.clear();
+    buttons.resize(g.config.rows * g.config.cols);
+    g.config.pageNames.erase(newPage);
+    g.currentPage = newPage;
+    return newPage;
 }
 
 static void DeletePageSectionsFromConfigFile(int page) {
@@ -1971,8 +1984,9 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Name", 56, 78, 150, 28);
         AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 220, 74, 330, 34);
         AddButton(hwnd, IDC_DELETE_PAGE, L"Delete page", 56, 154, 150, 38);
-        AddButton(hwnd, IDOK, L"OK", 338, 154, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 154, 104, 38);
+        AddButton(hwnd, IDC_ADD_PAGE, L"Add page", 220, 154, 150, 38);
+        AddButton(hwnd, IDOK, L"OK", 338, 210, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 210, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -1987,6 +2001,13 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
                 ctx->accepted = true;
                 DestroyWindow(hwnd);
             }
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_ADD_PAGE && ctx) {
+            g.config.pageNames[ctx->pageIndex] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
+            AddPage();
+            ctx->accepted = true;
+            DestroyWindow(hwnd);
             return 0;
         }
         if (LOWORD(wp) == IDCANCEL) {
@@ -2022,7 +2043,7 @@ static void ShowPageSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherPageSettingsEditor", L"Page Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 590, 270,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 590, 320,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
@@ -2040,6 +2061,7 @@ static void ShowContextMenu(POINT pt, int buttonIndex, bool pageTitle) {
     }
     if (pageTitle) {
         AppendMenuW(menu, MF_STRING, IDM_PAGE_SETTINGS, L"Page settings");
+        AppendMenuW(menu, MF_STRING, IDM_ADD_PAGE, L"Add page");
         AppendMenuW(menu, MF_STRING, IDM_DELETE_PAGE, L"Delete page");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     }
@@ -2188,6 +2210,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (id == IDM_PAGE_PREV) MovePage(false);
         else if (id == IDM_PAGE_NEXT) MovePage(true);
         else if (id == IDM_PAGE_SETTINGS) ShowPageSettingsDialog();
+        else if (id == IDM_ADD_PAGE) {
+            AddPage();
+            SaveConfig();
+            InvalidateRect(hwnd, nullptr, TRUE);
+        }
         else if (id == IDM_DELETE_PAGE) {
             if (ConfirmAndDeleteCurrentPage(hwnd)) {
                 SaveConfig();
