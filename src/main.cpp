@@ -11,6 +11,7 @@
 #include <wincodec.h>
 #include <dwmapi.h>
 #include <gdiplus.h>
+#include <wbemidl.h>
 #include <urlmon.h>
 #include <commctrl.h>
 #include "resource.h"
@@ -31,6 +32,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "wbemuuid.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
@@ -38,12 +40,6 @@
 #endif
 #ifndef DWMWCP_ROUND
 #define DWMWCP_ROUND 2
-#endif
-#ifndef VK_BRIGHTNESS_DOWN
-#define VK_BRIGHTNESS_DOWN 0x6F
-#endif
-#ifndef VK_BRIGHTNESS_UP
-#define VK_BRIGHTNESS_UP 0x70
 #endif
 enum class ActionType { None, Open, Command, Settings, Keys };
 
@@ -1513,8 +1509,6 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"VOLUMEUP" || token == L"VOLUME_UP") return VK_VOLUME_UP;
     if (token == L"VOLUMEDOWN" || token == L"VOLUME_DOWN") return VK_VOLUME_DOWN;
     if (token == L"MUTE" || token == L"VOLUMEMUTE" || token == L"VOLUME_MUTE") return VK_VOLUME_MUTE;
-    if (token == L"BRIGHTNESSUP" || token == L"BRIGHTNESS_UP") return VK_BRIGHTNESS_UP;
-    if (token == L"BRIGHTNESSDOWN" || token == L"BRIGHTNESS_DOWN") return VK_BRIGHTNESS_DOWN;
     if (token == L"SCREENSHOT" || token == L"PRINTSCREEN" || token == L"PRTSC") return VK_SNAPSHOT;
     if (token == L"PLAYPAUSE" || token == L"PLAY_PAUSE" || token == L"MEDIA_PLAY_PAUSE") return VK_MEDIA_PLAY_PAUSE;
     if (token == L"NEXTTRACK" || token == L"NEXT_TRACK" || token == L"MEDIA_NEXT_TRACK") return VK_MEDIA_NEXT_TRACK;
@@ -1634,8 +1628,171 @@ static void SendAltTabSwitch(bool reverse) {
     if (g.hwnd) SetTimer(g.hwnd, IDT_ALT_TAB_RELEASE, 2500, nullptr);
 }
 
+template <typename T>
+static void SafeRelease(T*& ptr) {
+    if (ptr) {
+        ptr->Release();
+        ptr = nullptr;
+    }
+}
+
+static bool SetWmiProxySecurity(IUnknown* proxy) {
+    if (!proxy) return false;
+    HRESULT hr = CoSetProxyBlanket(
+        proxy,
+        RPC_C_AUTHN_WINNT,
+        RPC_C_AUTHZ_NONE,
+        nullptr,
+        RPC_C_AUTHN_LEVEL_CALL,
+        RPC_C_IMP_LEVEL_IMPERSONATE,
+        nullptr,
+        EOAC_NONE);
+    return SUCCEEDED(hr);
+}
+
+static bool ConnectWmiBrightness(IWbemServices** services) {
+    if (!services) return false;
+    *services = nullptr;
+
+    IWbemLocator* locator = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER, IID_IWbemLocator, reinterpret_cast<void**>(&locator));
+    if (FAILED(hr)) return false;
+
+    BSTR ns = SysAllocString(L"ROOT\\WMI");
+    hr = locator->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, services);
+    SysFreeString(ns);
+    SafeRelease(locator);
+
+    if (FAILED(hr) || !*services) {
+        SafeRelease(*services);
+        return false;
+    }
+    return SetWmiProxySecurity(*services);
+}
+
+static bool GetInternalMonitorBrightness(IWbemServices* services, int& brightness) {
+    brightness = -1;
+    if (!services) return false;
+
+    IEnumWbemClassObject* enumerator = nullptr;
+    BSTR language = SysAllocString(L"WQL");
+    BSTR query = SysAllocString(L"SELECT CurrentBrightness FROM WmiMonitorBrightness");
+    HRESULT hr = services->ExecQuery(language, query, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enumerator);
+    SysFreeString(language);
+    SysFreeString(query);
+    if (FAILED(hr) || !enumerator) return false;
+
+    IWbemClassObject* object = nullptr;
+    ULONG returned = 0;
+    hr = enumerator->Next(3000, 1, &object, &returned);
+    SafeRelease(enumerator);
+    if (FAILED(hr) || returned == 0 || !object) return false;
+
+    VARIANT value{};
+    VariantInit(&value);
+    hr = object->Get(L"CurrentBrightness", 0, &value, nullptr, nullptr);
+    SafeRelease(object);
+    if (FAILED(hr)) {
+        VariantClear(&value);
+        return false;
+    }
+
+    if (value.vt == VT_UI1) brightness = value.bVal;
+    else if (value.vt == VT_I4) brightness = value.lVal;
+    else if (value.vt == VT_UI4) brightness = static_cast<int>(value.ulVal);
+    VariantClear(&value);
+    return brightness >= 0;
+}
+
+static bool SetInternalMonitorBrightness(IWbemServices* services, int brightness) {
+    if (!services) return false;
+    brightness = std::max(0, std::min(100, brightness));
+
+    IEnumWbemClassObject* enumerator = nullptr;
+    BSTR language = SysAllocString(L"WQL");
+    BSTR query = SysAllocString(L"SELECT * FROM WmiMonitorBrightnessMethods");
+    HRESULT hr = services->ExecQuery(language, query, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &enumerator);
+    SysFreeString(language);
+    SysFreeString(query);
+    if (FAILED(hr) || !enumerator) return false;
+
+    IWbemClassObject* methodObject = nullptr;
+    ULONG returned = 0;
+    hr = enumerator->Next(3000, 1, &methodObject, &returned);
+    SafeRelease(enumerator);
+    if (FAILED(hr) || returned == 0 || !methodObject) return false;
+
+    VARIANT path{};
+    VariantInit(&path);
+    hr = methodObject->Get(L"__PATH", 0, &path, nullptr, nullptr);
+    SafeRelease(methodObject);
+    if (FAILED(hr) || path.vt != VT_BSTR || !path.bstrVal) {
+        VariantClear(&path);
+        return false;
+    }
+
+    IWbemClassObject* methodClass = nullptr;
+    IWbemClassObject* inSignature = nullptr;
+    IWbemClassObject* inParams = nullptr;
+    BSTR className = SysAllocString(L"WmiMonitorBrightnessMethods");
+    BSTR methodName = SysAllocString(L"WmiSetBrightness");
+    hr = services->GetObject(className, 0, nullptr, &methodClass, nullptr);
+    if (SUCCEEDED(hr) && methodClass) {
+        hr = methodClass->GetMethod(methodName, 0, &inSignature, nullptr);
+    }
+    if (SUCCEEDED(hr) && inSignature) {
+        hr = inSignature->SpawnInstance(0, &inParams);
+    }
+    if (SUCCEEDED(hr) && inParams) {
+        VARIANT timeout{};
+        VariantInit(&timeout);
+        timeout.vt = VT_UI4;
+        timeout.ulVal = 0;
+        hr = inParams->Put(L"Timeout", 0, &timeout, 0);
+
+        VARIANT level{};
+        VariantInit(&level);
+        level.vt = VT_UI1;
+        level.bVal = static_cast<BYTE>(brightness);
+        if (SUCCEEDED(hr)) hr = inParams->Put(L"Brightness", 0, &level, 0);
+    }
+    if (SUCCEEDED(hr)) {
+        IWbemClassObject* outParams = nullptr;
+        hr = services->ExecMethod(path.bstrVal, methodName, 0, nullptr, inParams, &outParams, nullptr);
+        SafeRelease(outParams);
+    }
+
+    SysFreeString(methodName);
+    SysFreeString(className);
+    VariantClear(&path);
+    SafeRelease(inParams);
+    SafeRelease(inSignature);
+    SafeRelease(methodClass);
+    return SUCCEEDED(hr);
+}
+
+static bool AdjustInternalMonitorBrightness(int delta) {
+    IWbemServices* services = nullptr;
+    if (!ConnectWmiBrightness(&services)) return false;
+
+    int current = -1;
+    bool ok = GetInternalMonitorBrightness(services, current);
+    if (ok) {
+        const int target = std::max(0, std::min(100, current + delta));
+        ok = target == current || SetInternalMonitorBrightness(services, target);
+    }
+    SafeRelease(services);
+    return ok;
+}
+
 static void SendKeySpec(const std::wstring& spec) {
     std::wstring trimmed = Trim(spec);
+    if (trimmed == L"BRIGHTNESS_UP" || trimmed == L"BRIGHTNESS_DOWN") {
+        if (!AdjustInternalMonitorBrightness(trimmed == L"BRIGHTNESS_UP" ? 10 : -10)) {
+            ShellExecuteW(g.hwnd, L"open", L"ms-settings:display", nullptr, nullptr, SW_SHOWNORMAL);
+        }
+        return;
+    }
     if (trimmed == L"ALT_TAB_NEXT" || trimmed == L"ALT_TAB_PREV") {
         SendAltTabSwitch(trimmed == L"ALT_TAB_PREV");
         return;
@@ -3585,6 +3742,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     EnableDpiAwareness();
     HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    HRESULT securityInit = CoInitializeSecurity(
+        nullptr,
+        -1,
+        nullptr,
+        nullptr,
+        RPC_C_AUTHN_LEVEL_DEFAULT,
+        RPC_C_IMP_LEVEL_IMPERSONATE,
+        nullptr,
+        EOAC_NONE,
+        nullptr);
+    (void)securityInit;
     Gdiplus::GdiplusStartupInput gdiplusInput{};
     Gdiplus::GdiplusStartup(&g.gdiplusToken, &gdiplusInput, nullptr);
     g.instance = instance;
