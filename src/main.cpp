@@ -1821,6 +1821,56 @@ static std::wstring TextBadgeFromTitle(const std::wstring& title, const wchar_t*
 
 static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind);
 
+static void ComputeDisplayDefaults(HWND hwnd, const std::wstring& kind, std::wstring& title, std::wstring& text) {
+    HWND targetCtrl = GetDlgItem(hwnd, IDC_TARGET);
+    std::wstring target = GetWindowTextString(targetCtrl);
+    title.clear();
+    text.clear();
+
+    if (IsSystemKeyKind(kind)) {
+        title = kind;
+        text = (kind == L"Volume Up" || kind == L"音量アップ") ? L"VOL+" :
+            (kind == L"Volume Down" || kind == L"音量ダウン") ? L"VOL-" :
+            (kind == L"Volume Up++" || kind == L"音量アップ++") ? L"VOL++" :
+            (kind == L"Volume Down--" || kind == L"音量ダウン--") ? L"VOL--" :
+            (kind == L"Mute" || kind == L"ミュート") ? L"MUTE" :
+            (kind == L"Screenshot" || kind == L"スクリーンショット") ? L"SS" :
+            (kind == L"Play/Pause" || kind == L"再生/一時停止") ? L"PLAY" :
+            (kind == L"Next Track" || kind == L"次のトラック") ? L"NEXT" :
+            (kind == L"Previous Track" || kind == L"前のトラック") ? L"PREV" : L"STOP";
+    } else if (kind == L"URL") {
+        if (target.empty()) return;
+        std::wstring host = HostFromUrl(target);
+        title = host.empty() ? target : host;
+        text = L"URL";
+    } else if (kind == L"Windows Settings") {
+        if (target.empty()) return;
+        title = L"Windows Settings";
+        text = L"SET";
+    } else if (kind == L"App (.exe)" || kind == L"File" || kind == L"Folder") {
+        if (target.empty()) return;
+        title = FileNameFromPath(target, kind != L"Folder");
+        text = TextBadgeFromTitle(title, kind == L"App (.exe)" ? L"APP" : L"FILE");
+    } else if (kind == L"Keys") {
+        if (target.empty()) return;
+        title = CompactKeySpec(target);
+        text = KeyBadgeFromSpec(target);
+    }
+}
+
+static void ApplyDisplayDefaults(HWND hwnd, const std::wstring& kind, bool force) {
+    std::wstring title;
+    std::wstring text;
+    ComputeDisplayDefaults(hwnd, kind, title, text);
+    if (title.empty() && text.empty()) return;
+
+    HWND titleCtrl = GetDlgItem(hwnd, IDC_TITLE);
+    HWND textCtrl = GetDlgItem(hwnd, IDC_TEXT);
+    if (force || GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, title.c_str());
+    if (force || GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, text.c_str());
+    if (force) SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
+}
+
 static void ImportFavoriteUrl(HWND hwnd) {
     std::vector<FavoriteLink> links = LoadBrowserFavorites();
     if (links.empty()) {
@@ -1842,9 +1892,11 @@ static void ImportFavoriteUrl(HWND hwnd) {
     if (cmd >= 5000 && cmd < 5000 + maxItems) {
         const FavoriteLink& link = links[cmd - 5000];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), link.url.c_str());
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), link.title.c_str());
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), L"URL");
-        FillDisplayDefaults(hwnd, L"URL");
+        std::wstring title = link.title.empty() ? HostFromUrl(link.url) : link.title;
+        if (title.empty()) title = link.url;
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), title.c_str());
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), L"URL");
+        SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
     }
 }
 
@@ -1952,13 +2004,13 @@ static void ImportStartMenuApp(HWND hwnd) {
         SetWindowTextW(GetDlgItem(hwnd, IDC_ARGS), app.args.c_str());
         if (!app.iconPath.empty() && _wcsicmp(PathFindExtensionW(app.iconPath.c_str()), L".exe") != 0 && _wcsicmp(PathFindExtensionW(app.iconPath.c_str()), L".dll") != 0) {
             SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), app.iconPath.c_str());
+        } else {
+            SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
         }
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), app.title.c_str());
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) {
-            std::wstring text = TextBadgeFromTitle(app.title, L"APP");
-            SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), text.c_str());
-        }
-        FillDisplayDefaults(hwnd, L"App (.exe)");
+        std::wstring title = app.title.empty() ? FileNameFromPath(app.target, true) : app.title;
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), title.c_str());
+        std::wstring text = TextBadgeFromTitle(title, L"APP");
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), text.c_str());
     }
 }
 
@@ -1999,53 +2051,14 @@ static void ChooseWindowsSetting(HWND hwnd) {
     if (cmd >= 7000 && cmd < 7000 + count) {
         const SettingsPreset& preset = kSettingsPresets[cmd - 7000];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), preset.uri);
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TITLE)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
-        if (GetWindowTextLengthW(GetDlgItem(hwnd, IDC_TEXT)) == 0) SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
     }
 }
 
 static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
-    HWND titleCtrl = GetDlgItem(hwnd, IDC_TITLE);
-    HWND textCtrl = GetDlgItem(hwnd, IDC_TEXT);
-    HWND targetCtrl = GetDlgItem(hwnd, IDC_TARGET);
-    std::wstring target = GetWindowTextString(targetCtrl);
-
-    if (IsSystemKeyKind(kind)) {
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, kind.c_str());
-        if (GetWindowTextLengthW(textCtrl) == 0) {
-            std::wstring badge = (kind == L"Volume Up" || kind == L"音量アップ") ? L"VOL+" :
-                (kind == L"Volume Down" || kind == L"音量ダウン") ? L"VOL-" :
-                (kind == L"Volume Up++" || kind == L"音量アップ++") ? L"VOL++" :
-                (kind == L"Volume Down--" || kind == L"音量ダウン--") ? L"VOL--" :
-                (kind == L"Mute" || kind == L"ミュート") ? L"MUTE" :
-                (kind == L"Screenshot" || kind == L"スクリーンショット") ? L"SS" :
-                (kind == L"Play/Pause" || kind == L"再生/一時停止") ? L"PLAY" :
-                (kind == L"Next Track" || kind == L"次のトラック") ? L"NEXT" :
-                (kind == L"Previous Track" || kind == L"前のトラック") ? L"PREV" : L"STOP";
-            SetWindowTextW(textCtrl, badge.c_str());
-        }
-    } else if (kind == L"URL") {
-        if (target.empty()) return;
-        std::wstring host = HostFromUrl(target);
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, host.empty() ? target.c_str() : host.c_str());
-        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"URL");
-    } else if (kind == L"Windows Settings") {
-        if (target.empty()) return;
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, L"Windows Settings");
-        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, L"SET");
-    } else if (kind == L"App (.exe)" || kind == L"File" || kind == L"Folder") {
-        if (target.empty()) return;
-        std::wstring name = FileNameFromPath(target, kind != L"Folder");
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, name.c_str());
-        if (GetWindowTextLengthW(textCtrl) == 0) {
-            std::wstring badge = TextBadgeFromTitle(name, kind == L"App (.exe)" ? L"APP" : L"FILE");
-            SetWindowTextW(textCtrl, badge.c_str());
-        }
-    } else if (kind == L"Keys") {
-        if (target.empty()) return;
-        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, CompactKeySpec(target).c_str());
-        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, KeyBadgeFromSpec(target).c_str());
-    }
+    ApplyDisplayDefaults(hwnd, kind, false);
 }
 
 struct KeyChoice {
@@ -2263,7 +2276,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (LOWORD(wp) == IDC_ACTION && HIWORD(wp) == CBN_SELCHANGE) {
             UpdateButtonEditorFields(hwnd);
             std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
-            if (IsSystemKeyKind(kind)) FillDisplayDefaults(hwnd, kind);
+            if (IsSystemKeyKind(kind)) ApplyDisplayDefaults(hwnd, kind, true);
             return 0;
         }
         if (LOWORD(wp) == IDC_BROWSE) {
@@ -2280,7 +2293,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             else if (kind == L"Keys") target = ChooseKeySpec(hwnd, GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET)));
             if (!target.empty()) {
                 SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), target.c_str());
-                FillDisplayDefaults(hwnd, kind);
+                ApplyDisplayDefaults(hwnd, kind, true);
             }
             return 0;
         }
