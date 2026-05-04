@@ -649,8 +649,35 @@ static bool DrawUrlFavicon(HDC hdc, const std::wstring& url, RECT rc) {
     return DrawCustomImage(hdc, cachePath, rc);
 }
 
+static bool DrawShellItemImage(HDC hdc, const std::wstring& target, RECT rc) {
+    if (target.empty()) return false;
+
+    int side = std::min(rc.right - rc.left, rc.bottom - rc.top) - 32;
+    if (side < 24) side = 24;
+
+    IShellItemImageFactory* imageFactory = nullptr;
+    HRESULT hr = SHCreateItemFromParsingName(target.c_str(), nullptr, IID_PPV_ARGS(&imageFactory));
+    if (FAILED(hr) || !imageFactory) return false;
+
+    HBITMAP bitmap = nullptr;
+    SIZE size{ side, side };
+    hr = imageFactory->GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, &bitmap);
+    imageFactory->Release();
+    if (FAILED(hr) || !bitmap) return false;
+
+    Graphics graphics(hdc);
+    ConfigureImageGraphics(graphics);
+    Bitmap gdipBitmap(bitmap, nullptr);
+    Rect dest(rc.left + ((rc.right - rc.left) - side) / 2, rc.top + 12, side, side);
+    Status status = graphics.DrawImage(&gdipBitmap, dest);
+    DeleteObject(bitmap);
+    return status == Ok;
+}
+
 static bool DrawShellIcon(HDC hdc, const std::wstring& target, RECT rc) {
     if (target.empty()) return false;
+    if (DrawShellItemImage(hdc, target, rc)) return true;
+
     SHFILEINFOW info{};
     DWORD flags = SHGFI_ICON | SHGFI_LARGEICON;
     bool success = false;
