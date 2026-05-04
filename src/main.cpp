@@ -12,6 +12,8 @@
 #include <dwmapi.h>
 #include <gdiplus.h>
 #include <wbemidl.h>
+#include <powrprof.h>
+#include <powersetting.h>
 #include <urlmon.h>
 #include <commctrl.h>
 #include "resource.h"
@@ -33,6 +35,7 @@
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "wbemuuid.lib")
+#pragma comment(lib, "powrprof.lib")
 #pragma comment(linker,"\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
@@ -1771,7 +1774,49 @@ static bool SetInternalMonitorBrightness(IWbemServices* services, int brightness
     return SUCCEEDED(hr);
 }
 
+static const GUID kVideoSubgroupGuid = {
+    0x7516b95f, 0xf776, 0x4464, { 0x8c, 0x53, 0x06, 0x16, 0x7f, 0x40, 0xcc, 0x99 }
+};
+
+static const GUID kDisplayBrightnessGuid = {
+    0xaded5e82, 0xb909, 0x4619, { 0x99, 0x49, 0xf5, 0xd7, 0x1d, 0xac, 0x0b, 0xcb }
+};
+
+static bool AdjustPowerSchemeBrightness(int delta) {
+    GUID* scheme = nullptr;
+    DWORD result = PowerGetActiveScheme(nullptr, &scheme);
+    if (result != ERROR_SUCCESS || !scheme) return false;
+
+    SYSTEM_POWER_STATUS powerStatus{};
+    const bool onBattery = GetSystemPowerStatus(&powerStatus) && powerStatus.ACLineStatus == 0;
+    DWORD current = 0;
+    if (onBattery) {
+        result = PowerReadDCValueIndex(nullptr, scheme, &kVideoSubgroupGuid, &kDisplayBrightnessGuid, &current);
+    } else {
+        result = PowerReadACValueIndex(nullptr, scheme, &kVideoSubgroupGuid, &kDisplayBrightnessGuid, &current);
+    }
+
+    bool ok = false;
+    if (result == ERROR_SUCCESS) {
+        const DWORD target = static_cast<DWORD>(std::max(0, std::min(100, static_cast<int>(current) + delta)));
+        if (onBattery) {
+            result = PowerWriteDCValueIndex(nullptr, scheme, &kVideoSubgroupGuid, &kDisplayBrightnessGuid, target);
+        } else {
+            result = PowerWriteACValueIndex(nullptr, scheme, &kVideoSubgroupGuid, &kDisplayBrightnessGuid, target);
+        }
+        if (result == ERROR_SUCCESS) {
+            result = PowerSetActiveScheme(nullptr, scheme);
+            ok = result == ERROR_SUCCESS;
+        }
+    }
+
+    LocalFree(scheme);
+    return ok;
+}
+
 static bool AdjustInternalMonitorBrightness(int delta) {
+    if (AdjustPowerSchemeBrightness(delta)) return true;
+
     IWbemServices* services = nullptr;
     if (!ConnectWmiBrightness(&services)) return false;
 
