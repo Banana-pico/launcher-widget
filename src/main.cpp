@@ -792,6 +792,142 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
     return true;
 }
 
+static std::wstring CompactKeySpec(std::wstring spec) {
+    spec = Trim(spec);
+    if (spec.rfind(L"SEQ:", 0) == 0) return L"SEQ";
+
+    std::wstring compact;
+    std::wstringstream ss(spec);
+    std::wstring token;
+    while (std::getline(ss, token, L'+')) {
+        token = Trim(token);
+        if (token == L"CONTROL") token = L"CTRL";
+        if (token == L"WINDOWS") token = L"WIN";
+        if (token == L"CAPS_LOCK") token = L"CAPS";
+        if (token == L"NUM_LOCK") token = L"NUM";
+        if (token == L"SCROLL_LOCK") token = L"SCR";
+        if (token == L"BACKSPACE") token = L"BACK";
+        if (token == L"PAGEUP") token = L"PGUP";
+        if (token == L"PAGEDOWN") token = L"PGDN";
+        if (!compact.empty()) compact += L"+";
+        compact += token;
+    }
+    return compact.empty() ? L"KEY" : compact;
+}
+
+static std::wstring KeyBadgeFromSpec(const std::wstring& spec) {
+    std::wstring compact = CompactKeySpec(spec);
+    if (compact == L"SEQ") return L"SEQ";
+
+    size_t pos = compact.find_last_of(L'+');
+    std::wstring badge = pos == std::wstring::npos ? compact : compact.substr(pos + 1);
+    if (badge == L"SPACE") return L"SPC";
+    if (badge == L"ENTER") return L"ENT";
+    if (badge == L"ESCAPE") return L"ESC";
+    if (badge == L"BACK") return L"BK";
+    if (badge == L"DELETE") return L"DEL";
+    if (badge == L"PRINTSCREEN") return L"PRT";
+    if (badge.size() > 5) badge = badge.substr(0, 5);
+    return badge.empty() ? L"KEY" : badge;
+}
+
+static std::vector<std::wstring> SplitKeySpecParts(const std::wstring& spec) {
+    std::vector<std::wstring> parts;
+    std::wstring trimmed = Trim(spec);
+    wchar_t delimiter = trimmed.rfind(L"SEQ:", 0) == 0 ? L',' : L'+';
+    if (delimiter == L',') trimmed = trimmed.substr(4);
+
+    std::wstringstream ss(trimmed);
+    std::wstring token;
+    while (std::getline(ss, token, delimiter)) {
+        token = CompactKeySpec(token);
+        if (!token.empty()) parts.push_back(token);
+    }
+    return parts;
+}
+
+static std::wstring KeyCapPrimaryText(const std::wstring& spec) {
+    std::wstring trimmed = Trim(spec);
+    if (trimmed.rfind(L"SEQ:", 0) == 0) {
+        std::vector<std::wstring> parts = SplitKeySpecParts(trimmed);
+        if (parts.empty()) return L"SEQ";
+        std::wstring first = KeyBadgeFromSpec(parts.front());
+        std::wstring last = parts.size() > 1 ? KeyBadgeFromSpec(parts.back()) : L"";
+        std::wstring label = last.empty() ? first : first + L">" + last;
+        return label.size() > 9 ? L"SEQ" : label;
+    }
+    return KeyBadgeFromSpec(trimmed);
+}
+
+static std::wstring KeyCapSecondaryText(const std::wstring& spec) {
+    std::wstring trimmed = Trim(spec);
+    if (trimmed.rfind(L"SEQ:", 0) == 0) {
+        std::vector<std::wstring> parts = SplitKeySpecParts(trimmed);
+        return parts.size() <= 1 ? L"SEQ" : L"SEQ x" + std::to_wstring(parts.size());
+    }
+
+    std::vector<std::wstring> parts = SplitKeySpecParts(trimmed);
+    if (parts.size() <= 1) return L"";
+    std::wstring mods;
+    for (size_t i = 0; i + 1 < parts.size(); ++i) {
+        std::wstring mod = parts[i];
+        if (mod == L"CONTROL") mod = L"CTRL";
+        if (mod.size() > 5) mod = mod.substr(0, 5);
+        if (!mods.empty()) mods += L"+";
+        mods += mod;
+    }
+    return mods;
+}
+
+static bool DrawKeySpecIcon(HDC hdc, const Action& action, RECT rc) {
+    if (action.type != ActionType::Keys || action.target.empty()) return false;
+
+    const int width = rc.right - rc.left;
+    const int height = rc.bottom - rc.top;
+    const int keyWidth = std::max(46, std::min(width - 26, 96));
+    const int keyHeight = std::max(32, std::min(height - 44, 58));
+    RECT keyRect{
+        rc.left + (width - keyWidth) / 2,
+        rc.top + 16,
+        rc.left + (width + keyWidth) / 2,
+        rc.top + 16 + keyHeight
+    };
+
+    HBRUSH fill = CreateSolidBrush(RGB(238, 242, 247));
+    HPEN edge = CreatePen(PS_SOLID, 2, RGB(170, 178, 192));
+    HGDIOBJ oldBrush = SelectObject(hdc, fill);
+    HGDIOBJ oldPen = SelectObject(hdc, edge);
+    RoundRect(hdc, keyRect.left, keyRect.top, keyRect.right, keyRect.bottom, 8, 8);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(fill);
+    DeleteObject(edge);
+
+    LOGFONTW lf{};
+    lf.lfHeight = -MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    lf.lfWeight = FW_SEMIBOLD;
+    wcscpy_s(lf.lfFaceName, L"Segoe UI");
+    HFONT font = CreateFontIndirectW(&lf);
+    HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(18, 22, 28));
+    std::wstring primary = KeyCapPrimaryText(action.target);
+    std::wstring secondary = KeyCapSecondaryText(action.target);
+    if (!secondary.empty()) {
+        RECT topText = keyRect;
+        topText.bottom = keyRect.top + keyHeight / 2;
+        RECT bottomText = keyRect;
+        bottomText.top = keyRect.top + keyHeight / 2 - 2;
+        DrawTextW(hdc, secondary.c_str(), -1, &topText, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
+        DrawTextW(hdc, primary.c_str(), -1, &bottomText, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+    } else {
+        DrawTextW(hdc, primary.c_str(), -1, &keyRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+    SelectObject(hdc, oldFont);
+    DeleteObject(font);
+    return true;
+}
+
 static void DrawHeaderControl(HDC hdc, RECT rc) {
     HBRUSH brush = CreateSolidBrush(RGB(37, 43, 52));
     HPEN pen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
@@ -895,6 +1031,7 @@ static void Paint(HDC hdc) {
         }
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
+            if (!drew) drew = DrawKeySpecIcon(hdc, b.action, r);
         }
         if (!drew && b.action.type == ActionType::Settings) {
             RECT settingsIconRect = r;
@@ -1868,6 +2005,10 @@ static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
             std::wstring badge = TextBadgeFromTitle(name, kind == L"App (.exe)" ? L"APP" : L"FILE");
             SetWindowTextW(textCtrl, badge.c_str());
         }
+    } else if (kind == L"Keys") {
+        if (target.empty()) return;
+        if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, CompactKeySpec(target).c_str());
+        if (GetWindowTextLengthW(textCtrl) == 0) SetWindowTextW(textCtrl, KeyBadgeFromSpec(target).c_str());
     }
 }
 
@@ -1884,20 +2025,20 @@ static const KeyChoice kKeyChoices[] = {
     { L"Esc", L"Esc", L"ESC", 0, 0, 1 }, { L"F1", L"F1", L"F1", 2, 0, 1 }, { L"F2", L"F2", L"F2", 3, 0, 1 }, { L"F3", L"F3", L"F3", 4, 0, 1 },
     { L"F4", L"F4", L"F4", 5, 0, 1 }, { L"F5", L"F5", L"F5", 7, 0, 1 }, { L"F6", L"F6", L"F6", 8, 0, 1 }, { L"F7", L"F7", L"F7", 9, 0, 1 },
     { L"F8", L"F8", L"F8", 10, 0, 1 }, { L"F9", L"F9", L"F9", 12, 0, 1 }, { L"F10", L"F10", L"F10", 13, 0, 1 }, { L"F11", L"F11", L"F11", 14, 0, 1 },
-    { L"F12", L"F12", L"F12", 15, 0, 1 }, { L"Prt", L"Prt", L"PRINTSCREEN", 17, 0, 1 }, { L"Scr", L"Scr", L"SCROLL_LOCK", 18, 0, 1 }, { L"Pause", L"Pause", L"PAUSE", 19, 0, 1 },
+    { L"F12", L"F12", L"F12", 15, 0, 1 }, { L"Prt", L"Prt", L"PRINTSCREEN", 17, 0, 1 }, { L"Scr", L"Scr", L"SCROLL_LOCK", 18, 0, 1 }, { L"Pau", L"Pau", L"PAUSE", 19, 0, 1 },
 
     { L"`", L"半/全", L"OEM_3", 0, 1, 1 }, { L"1", L"1", L"1", 1, 1, 1 }, { L"2", L"2", L"2", 2, 1, 1 }, { L"3", L"3", L"3", 3, 1, 1 },
     { L"4", L"4", L"4", 4, 1, 1 }, { L"5", L"5", L"5", 5, 1, 1 }, { L"6", L"6", L"6", 6, 1, 1 }, { L"7", L"7", L"7", 7, 1, 1 },
     { L"8", L"8", L"8", 8, 1, 1 }, { L"9", L"9", L"9", 9, 1, 1 }, { L"0", L"0", L"0", 10, 1, 1 }, { L"-", L"-", L"OEM_MINUS", 11, 1, 1 },
     { L"=", L"^", L"OEM_PLUS", 12, 1, 1 }, { L"Back", L"Back", L"BACKSPACE", 13, 1, 2 },
-    { L"Ins", L"Ins", L"INSERT", 17, 1, 1 }, { L"Home", L"Home", L"HOME", 18, 1, 1 }, { L"PgUp", L"PgUp", L"PAGEUP", 19, 1, 1 },
+    { L"Ins", L"Ins", L"INSERT", 17, 1, 1 }, { L"Hm", L"Hm", L"HOME", 18, 1, 1 }, { L"PU", L"PU", L"PAGEUP", 19, 1, 1 },
     { L"Num", L"Num", L"NUM_LOCK", 21, 1, 1 }, { L"/", L"/", L"NUMDIV", 22, 1, 1 }, { L"*", L"*", L"NUMMUL", 23, 1, 1 }, { L"-", L"-", L"NUMSUB", 24, 1, 1 },
 
     { L"Tab", L"Tab", L"TAB", 0, 2, 2 }, { L"Q", L"Q", L"Q", 2, 2, 1 }, { L"W", L"W", L"W", 3, 2, 1 }, { L"E", L"E", L"E", 4, 2, 1 },
     { L"R", L"R", L"R", 5, 2, 1 }, { L"T", L"T", L"T", 6, 2, 1 }, { L"Y", L"Y", L"Y", 7, 2, 1 }, { L"U", L"U", L"U", 8, 2, 1 },
     { L"I", L"I", L"I", 9, 2, 1 }, { L"O", L"O", L"O", 10, 2, 1 }, { L"P", L"P", L"P", 11, 2, 1 }, { L"[", L"@", L"OEM_4", 12, 2, 1 },
     { L"]", L"[", L"OEM_6", 13, 2, 1 }, { L"\\", L"]", L"OEM_5", 14, 2, 1 },
-    { L"Del", L"Del", L"DELETE", 17, 2, 1 }, { L"End", L"End", L"END", 18, 2, 1 }, { L"PgDn", L"PgDn", L"PAGEDOWN", 19, 2, 1 },
+    { L"Del", L"Del", L"DELETE", 17, 2, 1 }, { L"End", L"End", L"END", 18, 2, 1 }, { L"PD", L"PD", L"PAGEDOWN", 19, 2, 1 },
     { L"7", L"7", L"NUM7", 21, 2, 1 }, { L"8", L"8", L"NUM8", 22, 2, 1 }, { L"9", L"9", L"NUM9", 23, 2, 1 }, { L"+", L"+", L"NUMADD", 24, 2, 1 },
 
     { L"Caps", L"Caps", L"CAPS_LOCK", 0, 3, 2 }, { L"A", L"A", L"A", 2, 3, 1 }, { L"S", L"S", L"S", 3, 3, 1 }, { L"D", L"D", L"D", 4, 3, 1 },
@@ -1914,7 +2055,7 @@ static const KeyChoice kKeyChoices[] = {
 
     { L"Ctrl", L"Ctrl", L"CTRL", 0, 5, 2 }, { L"Win", L"Win", L"WIN", 2, 5, 1 }, { L"Alt", L"Alt", L"ALT", 3, 5, 2 },
     { L"Space", L"Space", L"SPACE", 5, 5, 6 }, { L"Alt", L"Alt", L"ALT", 11, 5, 2 }, { L"Menu", L"Menu", L"MENU", 13, 5, 1 }, { L"Ctrl", L"Ctrl", L"CTRL", 14, 5, 1 },
-    { L"Left", L"Left", L"LEFT", 17, 5, 1 }, { L"Down", L"Down", L"DOWN", 18, 5, 1 }, { L"Right", L"Right", L"RIGHT", 19, 5, 1 },
+    { L"Lt", L"Lt", L"LEFT", 17, 5, 1 }, { L"Dn", L"Dn", L"DOWN", 18, 5, 1 }, { L"Rt", L"Rt", L"RIGHT", 19, 5, 1 },
     { L"0", L"0", L"NUM0", 21, 5, 2 }, { L".", L".", L"NUMDECIMAL", 23, 5, 1 }
 };
 
@@ -1950,6 +2091,11 @@ static void KeyPickerAddSpec(HWND hwnd, const std::wstring& chord) {
     SetWindowTextW(edit, current.c_str());
 }
 
+static void AddCheckWithReadableLabel(HWND hwnd, int id, const wchar_t* text, int x, int y, int labelWidth) {
+    AddButton(hwnd, id, L"", x, y + 2, 22, 22, BS_AUTOCHECKBOX);
+    AddLabel(hwnd, text, x + 28, y, labelWidth, 28);
+}
+
 static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     KeyPickerContext* ctx = reinterpret_cast<KeyPickerContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (msg) {
@@ -1962,10 +2108,10 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"同時押下"));
         SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"順次押下"));
         SendMessageW(mode, CB_SETCURSEL, IsSequenceKeySpec(ctx->spec) ? 1 : 0, 0);
-        AddButton(hwnd, IDC_KEY_CTRL, L"Ctrl", 286, 18, 74, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_ALT, L"Alt", 366, 18, 74, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_SHIFT, L"Shift", 446, 18, 84, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_WIN, L"Win", 536, 18, 74, 30, BS_AUTOCHECKBOX);
+        AddCheckWithReadableLabel(hwnd, IDC_KEY_CTRL, L"Ctrl", 286, 18, 48);
+        AddCheckWithReadableLabel(hwnd, IDC_KEY_ALT, L"Alt", 366, 18, 42);
+        AddCheckWithReadableLabel(hwnd, IDC_KEY_SHIFT, L"Shift", 446, 18, 58);
+        AddCheckWithReadableLabel(hwnd, IDC_KEY_WIN, L"Win", 546, 18, 42);
         AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 760, 34);
         AddButton(hwnd, IDC_KEY_CLEAR, L"クリア", 800, 62, 92, 34);
 
