@@ -1029,19 +1029,27 @@ static bool DrawKeySpecIcon(HDC hdc, const Action& action, RECT rc) {
     return true;
 }
 
-static void DrawHeaderControl(HDC hdc, RECT rc) {
-    HBRUSH brush = CreateSolidBrush(RGB(37, 43, 52));
-    HPEN pen = CreatePen(PS_SOLID, 1, RGB(104, 116, 136));
+static RECT RectInset(RECT rc, int inset) {
+    rc.left += inset;
+    rc.top += inset;
+    rc.right -= inset;
+    rc.bottom -= inset;
+    return rc;
+}
+
+static void DrawHeaderControl(HDC hdc, RECT rc, COLORREF fill) {
+    RECT circle = RectInset(rc, 3);
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = static_cast<HPEN>(GetStockObject(NULL_PEN));
     HGDIOBJ oldBrush = SelectObject(hdc, brush);
     HGDIOBJ oldPen = SelectObject(hdc, pen);
-    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
+    Ellipse(hdc, circle.left, circle.top, circle.right, circle.bottom);
     SelectObject(hdc, oldBrush);
     SelectObject(hdc, oldPen);
     DeleteObject(brush);
-    DeleteObject(pen);
 }
 
-static void DrawSettingsIcon(HDC hdc, RECT rc) {
+static void DrawSettingsIcon(HDC hdc, RECT rc, COLORREF bgColor = RGB(37, 43, 52)) {
     const float cx = (rc.left + rc.right) / 2.0f;
     const float cy = (rc.top + rc.bottom) / 2.0f;
     const float size = static_cast<float>(std::min(rc.right - rc.left, rc.bottom - rc.top));
@@ -1076,7 +1084,7 @@ static void DrawSettingsIcon(HDC hdc, RECT rc) {
     Ellipse(hdc, static_cast<int>(cx) - hr, static_cast<int>(cy) - hr, static_cast<int>(cx) + hr, static_cast<int>(cy) + hr);
     EndPath(hdc);
 
-    HBRUSH bgBrush = CreateSolidBrush(RGB(37, 43, 52));
+    HBRUSH bgBrush = CreateSolidBrush(bgColor);
     SelectObject(hdc, gearBrush);
     SetBkMode(hdc, TRANSPARENT);
     FillPath(hdc);
@@ -1090,6 +1098,28 @@ static void DrawSettingsIcon(HDC hdc, RECT rc) {
     SetPolyFillMode(hdc, oldMode);
     DeleteObject(gearBrush);
     DeleteObject(bgBrush);
+}
+
+static void DrawHeaderMinusIcon(HDC hdc, RECT rc) {
+    HPEN pen = CreatePen(PS_SOLID, 2, RGB(92, 63, 20));
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    const int cy = (rc.top + rc.bottom) / 2;
+    MoveToEx(hdc, rc.left + 8, cy, nullptr);
+    LineTo(hdc, rc.right - 8, cy);
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
+}
+
+static void DrawHeaderCloseIcon(HDC hdc, RECT rc) {
+    HPEN pen = CreatePen(PS_SOLID, 2, RGB(98, 25, 25));
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    RECT mark = RectInset(rc, 8);
+    MoveToEx(hdc, mark.left, mark.top, nullptr);
+    LineTo(hdc, mark.right, mark.bottom);
+    MoveToEx(hdc, mark.right, mark.top, nullptr);
+    LineTo(hdc, mark.left, mark.bottom);
+    SelectObject(hdc, oldPen);
+    DeleteObject(pen);
 }
 
 static void Paint(HDC hdc) {
@@ -1113,14 +1143,17 @@ static void Paint(HDC hdc) {
     RECT closeRect = HeaderButtonRect(0);
     DrawCenteredText(hdc, pageTitleRect, PageName(g.currentPage), 9, true);
 
-    DrawHeaderControl(hdc, settingsRect);
-    DrawHeaderControl(hdc, minimizeRect);
-    DrawHeaderControl(hdc, closeRect);
+    const COLORREF settingsFill = RGB(75, 87, 104);
+    const COLORREF minimizeFill = RGB(255, 190, 76);
+    const COLORREF closeFill = RGB(255, 95, 86);
+    DrawHeaderControl(hdc, settingsRect, settingsFill);
+    DrawHeaderControl(hdc, minimizeRect, minimizeFill);
+    DrawHeaderControl(hdc, closeRect, closeFill);
     DrawCenteredText(hdc, prevRect, L"<", 12, true);
     DrawCenteredText(hdc, nextRect, L">", 12, true);
-    DrawSettingsIcon(hdc, settingsRect);
-    DrawCenteredText(hdc, minimizeRect, L"_", 11, true);
-    DrawCenteredText(hdc, closeRect, L"X", 10, true);
+    DrawSettingsIcon(hdc, RectInset(settingsRect, 2), settingsFill);
+    DrawHeaderMinusIcon(hdc, minimizeRect);
+    DrawHeaderCloseIcon(hdc, closeRect);
 
     auto& buttons = CurrentButtons();
     const int count = g.config.rows * g.config.cols;
