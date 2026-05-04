@@ -19,9 +19,11 @@
 #include "resource.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cwctype>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <string>
@@ -697,6 +699,7 @@ static bool IsTextTruncated(HDC hdc, const std::wstring& text, RECT rc, int poin
 
 static bool IsWebUrl(const std::wstring& value);
 static std::wstring HostFromUrl(const std::wstring& url);
+static std::wstring OriginFromUrl(const std::wstring& url);
 
 static IWICImagingFactory* GetWicFactory() {
     static IWICImagingFactory* factory = nullptr;
@@ -764,6 +767,117 @@ static HBITMAP LoadBitmapWithWic(const std::wstring& path, int side) {
     return hBitmap;
 }
 
+static bool LoadCachedIconFile(const std::wstring& path, int side, CachedIcon& cached) {
+    cached.bitmap = LoadBitmapWithWic(path, side);
+    if (cached.bitmap) return true;
+
+    cached.icon = static_cast<HICON>(LoadImageW(nullptr, path.c_str(), IMAGE_ICON, side, side, LR_LOADFROMFILE));
+    return cached.icon != nullptr;
+}
+
+static bool DownloadIconCandidate(const std::wstring& url, int side, CachedIcon& cached) {
+    wchar_t cachePath[MAX_PATH]{};
+    if (FAILED(URLDownloadToCacheFileW(nullptr, url.c_str(), cachePath, MAX_PATH, 0, nullptr))) return false;
+    return LoadCachedIconFile(cachePath, side, cached);
+}
+
+static std::string ToLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+static std::string HtmlAttrValue(const std::string& tag, const std::string& attrName) {
+    std::string lower = ToLowerAscii(tag);
+    std::string needle = attrName;
+    size_t pos = lower.find(needle);
+    while (pos != std::string::npos) {
+        if (pos == 0 || std::isspace(static_cast<unsigned char>(lower[pos - 1])) || lower[pos - 1] == '<') {
+            size_t valueStart = pos + needle.size();
+            while (valueStart < lower.size() && std::isspace(static_cast<unsigned char>(lower[valueStart]))) ++valueStart;
+            if (valueStart >= lower.size() || lower[valueStart] != '=') {
+                pos = lower.find(needle, pos + needle.size());
+                continue;
+            }
+            ++valueStart;
+            while (valueStart < lower.size() && std::isspace(static_cast<unsigned char>(lower[valueStart]))) ++valueStart;
+            if (valueStart >= tag.size()) return "";
+            char quote = tag[valueStart];
+            if (quote == '"' || quote == '\'') {
+                size_t valueEnd = tag.find(quote, valueStart + 1);
+                if (valueEnd == std::string::npos) return "";
+                return tag.substr(valueStart + 1, valueEnd - valueStart - 1);
+            }
+            size_t valueEnd = lower.find_first_of(" \t\r\n>", valueStart);
+            return tag.substr(valueStart, valueEnd == std::string::npos ? std::string::npos : valueEnd - valueStart);
+        }
+        pos = lower.find(needle, pos + needle.size());
+    }
+    return "";
+}
+
+static void ReplaceAll(std::string& value, const std::string& from, const std::string& to) {
+    size_t pos = 0;
+    while ((pos = value.find(from, pos)) != std::string::npos) {
+        value.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
+
+static std::wstring ResolveUrl(const std::wstring& baseUrl, const std::wstring& href) {
+    if (href.empty()) return L"";
+    if (href.rfind(L"http://", 0) == 0 || href.rfind(L"https://", 0) == 0) return href;
+    wchar_t resolved[4096]{};
+    DWORD length = static_cast<DWORD>(std::size(resolved));
+    if (SUCCEEDED(UrlCombineW(baseUrl.c_str(), href.c_str(), resolved, &length, 0))) return resolved;
+    return L"";
+}
+
+static std::vector<std::wstring> IconUrlsFromHtml(const std::wstring& pageUrl) {
+    wchar_t cachePath[MAX_PATH]{};
+    if (FAILED(URLDownloadToCacheFileW(nullptr, pageUrl.c_str(), cachePath, MAX_PATH, 0, nullptr))) return {};
+
+    std::ifstream file(cachePath, std::ios::binary);
+    if (!file) return {};
+    std::string html((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::string lower = ToLowerAscii(html);
+
+    std::vector<std::wstring> urls;
+    size_t pos = 0;
+    while ((pos = lower.find("<link", pos)) != std::string::npos) {
+        size_t end = lower.find('>', pos);
+        if (end == std::string::npos) break;
+        std::string tag = html.substr(pos, end - pos + 1);
+        std::string rel = ToLowerAscii(HtmlAttrValue(tag, "rel"));
+        if (rel.find("icon") != std::string::npos) {
+            std::string href = HtmlAttrValue(tag, "href");
+            ReplaceAll(href, "&amp;", "&");
+            std::wstring resolved = ResolveUrl(pageUrl, Utf8ToWide(href));
+            if (!resolved.empty()) urls.push_back(resolved);
+        }
+        pos = end + 1;
+    }
+    return urls;
+}
+
+static bool LoadFaviconForUrl(const std::wstring& pageUrl, int side, CachedIcon& cached) {
+    std::vector<std::wstring> candidates = IconUrlsFromHtml(pageUrl);
+    std::wstring origin = OriginFromUrl(pageUrl);
+    if (!origin.empty()) {
+        candidates.push_back(origin + L"/favicon.ico");
+        if (origin.rfind(L"http://", 0) == 0) {
+            candidates.push_back(L"https://" + origin.substr(7) + L"/favicon.ico");
+        }
+    }
+
+    for (const auto& candidate : candidates) {
+        if (DownloadIconCandidate(candidate, side, cached)) return true;
+        cached.Clear();
+    }
+    return false;
+}
+
 static void RefreshCurrentIcons() {
     auto& buttons = CurrentButtons();
     g.currentIcons.resize(buttons.size());
@@ -783,19 +897,12 @@ static void RefreshCurrentIcons() {
             loaded = g.currentIcons[i].bitmap != nullptr;
         }
         
-        if (!loaded && IsWebUrl(b.action.target)) {
-            std::wstring host = HostFromUrl(b.action.target);
-            if (!host.empty()) {
-                std::wstring faviconUrl = L"https://" + host + L"/favicon.ico";
-                wchar_t cachePath[MAX_PATH]{};
-                if (SUCCEEDED(URLDownloadToCacheFileW(nullptr, faviconUrl.c_str(), cachePath, MAX_PATH, 0, nullptr))) {
-                    g.currentIcons[i].bitmap = LoadBitmapWithWic(cachePath, side);
-                    loaded = g.currentIcons[i].bitmap != nullptr;
-                }
-            }
+        const bool isWebUrl = IsWebUrl(b.action.target);
+        if (!loaded && isWebUrl) {
+            loaded = LoadFaviconForUrl(b.action.target, side, g.currentIcons[i]);
         }
         
-        if (!loaded && (b.action.type == ActionType::Open || b.action.type == ActionType::Command) && !b.action.target.empty()) {
+        if (!loaded && !isWebUrl && (b.action.type == ActionType::Open || b.action.type == ActionType::Command) && !b.action.target.empty()) {
             SHFILEINFOW info{};
             DWORD flags = SHGFI_ICON | SHGFI_LARGEICON;
             if (b.action.target.rfind(L"shell:", 0) == 0) {
@@ -1397,6 +1504,41 @@ static bool DrawScreenControlIcon(HDC hdc, const ButtonConfig& button, RECT rc) 
     return true;
 }
 
+static bool DrawUrlIcon(HDC hdc, RECT rc) {
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(rc.right - rc.left);
+    const Gdiplus::REAL h = static_cast<Gdiplus::REAL>(rc.bottom - rc.top);
+    const Gdiplus::REAL side = std::max<Gdiplus::REAL>(static_cast<Gdiplus::REAL>(ScaleValue(30)), std::min(w, h) * 0.54f);
+    const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
+    const Gdiplus::REAL cy = rc.top + h * 0.42f;
+    const Gdiplus::Color white(245, 247, 250);
+    const Gdiplus::Color accent(120, 211, 255);
+    Gdiplus::Pen whitePen(white, static_cast<Gdiplus::REAL>(ScaleValue(3)));
+    Gdiplus::Pen accentPen(accent, static_cast<Gdiplus::REAL>(ScaleValue(3)));
+    Gdiplus::SolidBrush accentBrush(accent);
+
+    Gdiplus::RectF globe(cx - side * 0.30f, cy - side * 0.31f, side * 0.60f, side * 0.60f);
+    graphics.DrawEllipse(&whitePen, globe);
+    graphics.DrawArc(&accentPen, globe.X + globe.Width * 0.22f, globe.Y, globe.Width * 0.56f, globe.Height, 90.0f, 180.0f);
+    graphics.DrawArc(&accentPen, globe.X + globe.Width * 0.22f, globe.Y, globe.Width * 0.56f, globe.Height, 270.0f, 180.0f);
+    graphics.DrawLine(&whitePen, globe.X + globe.Width * 0.12f, cy, globe.X + globe.Width * 0.88f, cy);
+    graphics.DrawLine(&accentPen, cx, globe.Y + globe.Height * 0.04f, cx, globe.Y + globe.Height * 0.96f);
+
+    Gdiplus::RectF badge(cx + side * 0.06f, cy + side * 0.08f, side * 0.34f, side * 0.22f);
+    Gdiplus::GraphicsPath badgePath;
+    AddRoundedRectPath(badgePath, badge, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+    Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, 38, 43, 52));
+    graphics.FillPath(&bgBrush, &badgePath);
+    graphics.DrawPath(&accentPen, &badgePath);
+    graphics.FillEllipse(&accentBrush, badge.X + badge.Width * 0.20f, badge.Y + badge.Height * 0.38f, side * 0.05f, side * 0.05f);
+    graphics.FillEllipse(&accentBrush, badge.X + badge.Width * 0.46f, badge.Y + badge.Height * 0.38f, side * 0.05f, side * 0.05f);
+    graphics.FillEllipse(&accentBrush, badge.X + badge.Width * 0.72f, badge.Y + badge.Height * 0.38f, side * 0.05f, side * 0.05f);
+    return true;
+}
+
 static void Paint(HDC hdc) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
@@ -1480,6 +1622,9 @@ static void Paint(HDC hdc) {
 
         if (!drew) {
             drew = DrawScreenControlIcon(hdc, b, r);
+        }
+        if (!drew && IsWebUrl(b.action.target)) {
+            drew = DrawUrlIcon(hdc, r);
         }
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
@@ -2138,6 +2283,14 @@ static std::wstring HostFromUrl(const std::wstring& url) {
     start = start == std::wstring::npos ? 0 : start + 3;
     size_t end = url.find_first_of(L"/?#", start);
     return url.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+}
+
+static std::wstring OriginFromUrl(const std::wstring& url) {
+    size_t schemeEnd = url.find(L"://");
+    if (schemeEnd == std::wstring::npos) return L"";
+    size_t hostStart = schemeEnd + 3;
+    size_t hostEnd = url.find_first_of(L"/?#", hostStart);
+    return url.substr(0, hostEnd == std::wstring::npos ? std::wstring::npos : hostEnd);
 }
 
 static std::wstring UrlDecodeAscii(const std::string& value) {
