@@ -712,7 +712,7 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
 
     if (volumeUp || volumeDown || volumeUpFast || volumeDownFast || volumeMute) {
         SelectObject(hdc, brush);
-        RECT box{ left + side / 8, midY - side / 7, left + side / 3, midY + side / 7 };
+        RECT box{ left + side / 10, midY - side / 7, left + side / 3, midY + side / 7 };
         Rectangle(hdc, box.left, box.top, box.right, box.bottom);
 
         POINT speaker[] = {
@@ -730,20 +730,10 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
             MoveToEx(hdc, left + side * 5 / 6, midY - side / 6, nullptr);
             LineTo(hdc, left + side * 2 / 3, midY + side / 6);
         } else {
-            Arc(hdc, left + side / 2, top + side / 3, left + side * 4 / 5, top + side * 2 / 3,
-                left + side * 3 / 5, top + side / 3, left + side * 3 / 5, top + side * 2 / 3);
-            const int markX = left + side * 5 / 6;
-            const int markHalf = std::max(4, side / 8);
-            MoveToEx(hdc, markX - markHalf, midY, nullptr);
-            LineTo(hdc, markX + markHalf, midY);
-            if (volumeUp || volumeUpFast) {
-                MoveToEx(hdc, markX, midY - markHalf, nullptr);
-                LineTo(hdc, markX, midY + markHalf);
-            }
-            if (volumeUpFast || volumeDownFast) {
-                RECT fastRect{ left + side * 2 / 3, top + side * 3 / 4, left + side, top + side };
-                DrawCenteredText(hdc, fastRect, volumeUpFast ? L"++" : L"--", 11, true);
-            }
+            RECT markRect{ left + side * 3 / 5, top + side / 4, left + side, top + side * 3 / 4 };
+            DrawCenteredText(hdc, markRect,
+                volumeUpFast ? L"++" : volumeDownFast ? L"--" : volumeUp ? L"+" : L"-",
+                volumeUpFast || volumeDownFast ? 17 : 22, true);
         }
     } else if (screenshot) {
         RoundRect(hdc, left + side / 8, top + side / 4, left + side * 7 / 8, top + side * 3 / 4, 6, 6);
