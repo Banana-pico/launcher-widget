@@ -39,6 +39,12 @@
 #ifndef DWMWCP_ROUND
 #define DWMWCP_ROUND 2
 #endif
+#ifndef VK_BRIGHTNESS_DOWN
+#define VK_BRIGHTNESS_DOWN 0x6F
+#endif
+#ifndef VK_BRIGHTNESS_UP
+#define VK_BRIGHTNESS_UP 0x70
+#endif
 enum class ActionType { None, Open, Command, Settings, Keys };
 
 struct Action {
@@ -1088,6 +1094,15 @@ static Gdiplus::RectF RectFFromRect(RECT rc) {
         static_cast<Gdiplus::REAL>(rc.bottom - rc.top));
 }
 
+static void AddRoundedRectPath(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, Gdiplus::REAL radius) {
+    const Gdiplus::REAL diameter = std::max<Gdiplus::REAL>(1.0f, radius * 2.0f);
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddArc(rect.X + rect.Width - diameter, rect.Y + rect.Height - diameter, diameter, diameter, 0.0f, 90.0f);
+    path.AddArc(rect.X, rect.Y + rect.Height - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.CloseFigure();
+}
+
 static void DrawHeaderControl(HDC hdc, RECT rc, COLORREF fill) {
     RECT circle = RectInset(rc, ScaleValue(3));
     Gdiplus::Graphics graphics(hdc);
@@ -1176,6 +1191,143 @@ static void DrawHeaderCloseIcon(HDC hdc, RECT rc) {
     graphics.DrawLine(&pen, cx + half, cy - half, cx - half, cy + half);
 }
 
+struct ScreenPreset {
+    const wchar_t* title;
+    const wchar_t* target;
+    const wchar_t* badge;
+    ActionType type;
+};
+
+static const ScreenPreset kScreenPresets[] = {
+    { L"輝度を上げる", L"BRIGHTNESS_UP", L"BRI+", ActionType::Keys },
+    { L"輝度を下げる", L"BRIGHTNESS_DOWN", L"BRI-", ActionType::Keys },
+    { L"輝度調整", L"ms-settings:display", L"BRI", ActionType::Settings },
+    { L"ディスプレイ設定", L"ms-settings:display", L"DIS", ActionType::Settings },
+    { L"夜間モード", L"ms-settings:nightlight", L"NITE", ActionType::Settings },
+    { L"グラフィック設定", L"ms-settings:display-advancedgraphics", L"GPU", ActionType::Settings },
+    { L"テーマ選択", L"ms-settings:themes", L"THEM", ActionType::Settings },
+    { L"背景設定", L"ms-settings:personalization-background", L"BG", ActionType::Settings },
+    { L"色設定", L"ms-settings:colors", L"CLR", ActionType::Settings },
+    { L"ロック画面", L"ms-settings:lockscreen", L"LOCK", ActionType::Settings }
+};
+
+static const ScreenPreset* FindScreenPreset(const Action& action) {
+    for (const auto& preset : kScreenPresets) {
+        if (preset.type == action.type && _wcsicmp(action.target.c_str(), preset.target) == 0) return &preset;
+    }
+    return nullptr;
+}
+
+static const ScreenPreset* FindScreenPresetByTarget(const std::wstring& target) {
+    for (const auto& preset : kScreenPresets) {
+        if (_wcsicmp(target.c_str(), preset.target) == 0) return &preset;
+    }
+    return nullptr;
+}
+
+static bool DrawScreenControlIcon(HDC hdc, const Action& action, RECT rc) {
+    const ScreenPreset* preset = FindScreenPreset(action);
+    if (!preset) return false;
+
+    Gdiplus::Graphics graphics(hdc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+
+    const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(rc.right - rc.left);
+    const Gdiplus::REAL h = static_cast<Gdiplus::REAL>(rc.bottom - rc.top);
+    const Gdiplus::REAL side = std::max<Gdiplus::REAL>(static_cast<Gdiplus::REAL>(ScaleValue(30)), std::min(w, h) * 0.54f);
+    const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
+    const Gdiplus::REAL cy = rc.top + h * 0.42f;
+    const Gdiplus::Color white(245, 247, 250);
+    const Gdiplus::Color accent(120, 211, 255);
+    Gdiplus::Pen whitePen(white, static_cast<Gdiplus::REAL>(ScaleValue(3)));
+    Gdiplus::Pen accentPen(accent, static_cast<Gdiplus::REAL>(ScaleValue(3)));
+    Gdiplus::SolidBrush whiteBrush(white);
+    Gdiplus::SolidBrush accentBrush(accent);
+
+    const std::wstring target = action.target;
+    if (target == L"BRIGHTNESS_UP" || target == L"BRIGHTNESS_DOWN") {
+        Gdiplus::RectF monitor(cx - side * 0.36f, cy - side * 0.28f, side * 0.72f, side * 0.48f);
+        Gdiplus::GraphicsPath monitorPath;
+        AddRoundedRectPath(monitorPath, monitor, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+        graphics.DrawPath(&whitePen, &monitorPath);
+        const Gdiplus::REAL sunCx = monitor.X + monitor.Width * 0.50f;
+        const Gdiplus::REAL sunCy = monitor.Y + monitor.Height * 0.44f;
+        graphics.FillEllipse(&accentBrush, sunCx - side * 0.08f, sunCy - side * 0.08f, side * 0.16f, side * 0.16f);
+        for (int i = 0; i < 8; ++i) {
+            const double a = i * 3.14159265358979323846 / 4.0;
+            graphics.DrawLine(&accentPen,
+                sunCx + static_cast<Gdiplus::REAL>(cos(a)) * side * 0.13f,
+                sunCy + static_cast<Gdiplus::REAL>(sin(a)) * side * 0.13f,
+                sunCx + static_cast<Gdiplus::REAL>(cos(a)) * side * 0.20f,
+                sunCy + static_cast<Gdiplus::REAL>(sin(a)) * side * 0.20f);
+        }
+        const Gdiplus::REAL arrowY = monitor.Y + monitor.Height + side * 0.18f;
+        const Gdiplus::REAL arrowHalf = side * 0.12f;
+        const Gdiplus::REAL dir = target == L"BRIGHTNESS_UP" ? -1.0f : 1.0f;
+        graphics.DrawLine(&whitePen, cx, arrowY + dir * arrowHalf, cx, arrowY - dir * arrowHalf);
+        graphics.DrawLine(&whitePen, cx, arrowY - dir * arrowHalf, cx - arrowHalf * 0.75f, arrowY - dir * arrowHalf + dir * arrowHalf * 0.75f);
+        graphics.DrawLine(&whitePen, cx, arrowY - dir * arrowHalf, cx + arrowHalf * 0.75f, arrowY - dir * arrowHalf + dir * arrowHalf * 0.75f);
+        return true;
+    }
+    if (target == L"ms-settings:nightlight") {
+        Gdiplus::GraphicsPath moon;
+        moon.AddEllipse(cx - side * 0.28f, cy - side * 0.30f, side * 0.56f, side * 0.60f);
+        Gdiplus::SolidBrush bgBrush(Gdiplus::Color(22, 25, 30));
+        graphics.FillPath(&whiteBrush, &moon);
+        graphics.FillEllipse(&bgBrush, cx - side * 0.04f, cy - side * 0.34f, side * 0.50f, side * 0.58f);
+        return true;
+    }
+
+    if (target == L"ms-settings:themes" || target == L"ms-settings:colors") {
+        Gdiplus::RectF palette(cx - side * 0.35f, cy - side * 0.25f, side * 0.70f, side * 0.50f);
+        graphics.DrawEllipse(&whitePen, palette);
+        graphics.FillEllipse(&accentBrush, cx - side * 0.18f, cy - side * 0.10f, side * 0.12f, side * 0.12f);
+        graphics.FillEllipse(&accentBrush, cx + side * 0.04f, cy - side * 0.14f, side * 0.12f, side * 0.12f);
+        graphics.FillEllipse(&accentBrush, cx - side * 0.02f, cy + side * 0.06f, side * 0.12f, side * 0.12f);
+        graphics.FillEllipse(&whiteBrush, cx + side * 0.16f, cy + side * 0.02f, side * 0.16f, side * 0.16f);
+        return true;
+    }
+
+    if (target == L"ms-settings:personalization-background" || target == L"ms-settings:lockscreen") {
+        Gdiplus::RectF frame(cx - side * 0.36f, cy - side * 0.28f, side * 0.72f, side * 0.56f);
+        Gdiplus::GraphicsPath framePath;
+        AddRoundedRectPath(framePath, frame, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+        graphics.DrawPath(&whitePen, &framePath);
+        Gdiplus::PointF mountain[] = {
+            { frame.X + frame.Width * 0.12f, frame.Y + frame.Height * 0.78f },
+            { frame.X + frame.Width * 0.40f, frame.Y + frame.Height * 0.48f },
+            { frame.X + frame.Width * 0.58f, frame.Y + frame.Height * 0.68f },
+            { frame.X + frame.Width * 0.74f, frame.Y + frame.Height * 0.52f },
+            { frame.X + frame.Width * 0.90f, frame.Y + frame.Height * 0.78f }
+        };
+        graphics.DrawLines(&accentPen, mountain, 5);
+        graphics.FillEllipse(&accentBrush, frame.X + frame.Width * 0.68f, frame.Y + frame.Height * 0.16f, side * 0.10f, side * 0.10f);
+        return true;
+    }
+
+    Gdiplus::RectF monitor(cx - side * 0.36f, cy - side * 0.28f, side * 0.72f, side * 0.48f);
+    Gdiplus::GraphicsPath monitorPath;
+    AddRoundedRectPath(monitorPath, monitor, static_cast<Gdiplus::REAL>(ScaleValue(5)));
+    graphics.DrawPath(&whitePen, &monitorPath);
+    graphics.DrawLine(&whitePen, cx, monitor.Y + monitor.Height, cx, monitor.Y + monitor.Height + side * 0.14f);
+    graphics.DrawLine(&whitePen, cx - side * 0.18f, monitor.Y + monitor.Height + side * 0.16f, cx + side * 0.18f, monitor.Y + monitor.Height + side * 0.16f);
+    if (std::wstring(preset->title) == L"輝度調整") {
+        const Gdiplus::REAL sunCx = monitor.X + monitor.Width * 0.72f;
+        const Gdiplus::REAL sunCy = monitor.Y + monitor.Height * 0.38f;
+        graphics.FillEllipse(&accentBrush, sunCx - side * 0.07f, sunCy - side * 0.07f, side * 0.14f, side * 0.14f);
+        for (int i = 0; i < 8; ++i) {
+            const double a = i * 3.14159265358979323846 / 4.0;
+            graphics.DrawLine(&accentPen,
+                sunCx + static_cast<Gdiplus::REAL>(cos(a)) * side * 0.12f,
+                sunCy + static_cast<Gdiplus::REAL>(sin(a)) * side * 0.12f,
+                sunCx + static_cast<Gdiplus::REAL>(cos(a)) * side * 0.18f,
+                sunCy + static_cast<Gdiplus::REAL>(sin(a)) * side * 0.18f);
+        }
+    }
+    return true;
+}
+
 static void Paint(HDC hdc) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
@@ -1257,6 +1409,9 @@ static void Paint(HDC hdc) {
             }
         }
 
+        if (!drew) {
+            drew = DrawScreenControlIcon(hdc, b.action, r);
+        }
         if (!drew && b.action.type == ActionType::Keys) {
             drew = DrawSystemKeyIcon(hdc, b.action, r);
             if (!drew) drew = DrawKeySpecIcon(hdc, b.action, r);
@@ -1288,6 +1443,8 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"VOLUMEUP" || token == L"VOLUME_UP") return VK_VOLUME_UP;
     if (token == L"VOLUMEDOWN" || token == L"VOLUME_DOWN") return VK_VOLUME_DOWN;
     if (token == L"MUTE" || token == L"VOLUMEMUTE" || token == L"VOLUME_MUTE") return VK_VOLUME_MUTE;
+    if (token == L"BRIGHTNESSUP" || token == L"BRIGHTNESS_UP") return VK_BRIGHTNESS_UP;
+    if (token == L"BRIGHTNESSDOWN" || token == L"BRIGHTNESS_DOWN") return VK_BRIGHTNESS_DOWN;
     if (token == L"SCREENSHOT" || token == L"PRINTSCREEN" || token == L"PRTSC") return VK_SNAPSHOT;
     if (token == L"PLAYPAUSE" || token == L"PLAY_PAUSE" || token == L"MEDIA_PLAY_PAUSE") return VK_MEDIA_PLAY_PAUSE;
     if (token == L"NEXTTRACK" || token == L"NEXT_TRACK" || token == L"MEDIA_NEXT_TRACK") return VK_MEDIA_NEXT_TRACK;
@@ -1962,6 +2119,9 @@ struct ButtonEditorContext {
     bool cleared = false;
 };
 
+static constexpr const wchar_t* ACTION_KIND_SCREEN_CONTROL = L"画面制御";
+static constexpr const wchar_t* ACTION_KIND_WINDOWS_SETTINGS = L"Windows Settings";
+
 static std::wstring ComboText(HWND combo) {
     wchar_t text[128]{};
     int sel = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
@@ -1985,7 +2145,8 @@ static std::wstring SystemKeyTarget(const std::wstring& kind) {
 static std::wstring ActionKindForButton(const ButtonConfig& button) {
     const Action& action = button.action;
     if (action.type == ActionType::None) return L"None";
-    if (action.type == ActionType::Settings) return L"Windows Settings";
+    if (FindScreenPreset(action)) return ACTION_KIND_SCREEN_CONTROL;
+    if (action.type == ActionType::Settings) return ACTION_KIND_WINDOWS_SETTINGS;
     if (action.type == ActionType::Command) return L"Command";
     if (action.type == ActionType::Keys) {
         if (action.target == L"VOLUME_UP") return L"メディアコントロール";
@@ -2022,6 +2183,7 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     bool needsTarget = kind != L"None" && !IsSystemKeyKind(kind);
     bool needsArgs = kind == L"App (.exe)" || kind == L"File" || kind == L"Command";
     bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder" || kind == L"Keys";
+    const bool isScreenControlKind = kind == ACTION_KIND_SCREEN_CONTROL;
     bool canImport = kind == L"URL" || kind == L"App (.exe)" || kind == L"Windows Settings" || kind == L"メディアコントロール";
 
     SetWindowTextW(targetLabel, kind == L"URL" ? L"URL" :
@@ -2062,6 +2224,14 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     SetVisible(argsLabel, needsArgs);
     SetVisible(args, needsArgs);
     SetVisible(browse, canBrowse);
+    if (isScreenControlKind) {
+        SetWindowTextW(targetLabel, L"Settings");
+        SetWindowTextW(import, L"Choose");
+        MoveWindow(target, 220, 118, 588, 34, TRUE);
+        MoveWindow(import, 842, 118, 116, 34, TRUE);
+        canImport = true;
+    }
+
     SetVisible(import, canImport);
 }
 
@@ -2117,6 +2287,15 @@ static void ComputeDisplayDefaults(HWND hwnd, const std::wstring& kind, std::wst
         std::wstring host = HostFromUrl(target);
         title = host.empty() ? target : host;
         text = L"URL";
+    } else if (kind == ACTION_KIND_SCREEN_CONTROL) {
+        if (target.empty()) return;
+        if (const ScreenPreset* preset = FindScreenPresetByTarget(target)) {
+            title = preset->title;
+            text = preset->badge;
+            return;
+        }
+        title = ACTION_KIND_SCREEN_CONTROL;
+        text = L"SCR";
     } else if (kind == L"Windows Settings") {
         if (target.empty()) return;
         title = L"Windows Settings";
@@ -2325,6 +2504,25 @@ static void ChooseWindowsSetting(HWND hwnd) {
     if (cmd >= 7000 && cmd < 7000 + count) {
         const SettingsPreset& preset = kSettingsPresets[cmd - 7000];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), preset.uri);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
+    }
+}
+
+static void ChooseScreenControl(HWND hwnd) {
+    HMENU menu = CreatePopupMenu();
+    const int count = static_cast<int>(sizeof(kScreenPresets) / sizeof(kScreenPresets[0]));
+    for (int i = 0; i < count; ++i) {
+        AppendMenuW(menu, MF_STRING, 7600 + i, kScreenPresets[i].title);
+    }
+    RECT rc{};
+    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
+    DestroyMenu(menu);
+    if (cmd >= 7600 && cmd < 7600 + count) {
+        const ScreenPreset& preset = kScreenPresets[cmd - 7600];
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), preset.target);
         SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
         SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
         SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
@@ -2591,6 +2789,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"メディアコントロール", L"スクリーンショット", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
+        SendMessageW(combo, CB_INSERTSTRING, 5, reinterpret_cast<LPARAM>(ACTION_KIND_SCREEN_CONTROL));
         std::wstring kind = ActionKindForButton(ctx->original);
         SendMessageW(combo, CB_SELECTSTRING, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(kind.c_str()));
 
@@ -2645,6 +2844,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
             if (kind == L"App (.exe)") ImportStartMenuApp(hwnd);
             else if (kind == L"Windows Settings") ChooseWindowsSetting(hwnd);
+            else if (kind == ACTION_KIND_SCREEN_CONTROL) ChooseScreenControl(hwnd);
             else if (kind == L"メディアコントロール") ChooseMediaControl(hwnd);
             else ImportFavoriteUrl(hwnd);
             return 0;
@@ -2664,6 +2864,11 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             ctx->target->text = GetWindowTextString(GetDlgItem(hwnd, IDC_TEXT));
             ctx->target->imagePath = GetWindowTextString(GetDlgItem(hwnd, IDC_IMAGE));
             if (kind == L"None") ctx->target->action.type = ActionType::None;
+            else if (kind == ACTION_KIND_SCREEN_CONTROL) {
+                std::wstring screenTarget = GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET));
+                const ScreenPreset* preset = FindScreenPresetByTarget(screenTarget);
+                ctx->target->action.type = preset ? preset->type : ActionType::Settings;
+            }
             else if (kind == L"Windows Settings") ctx->target->action.type = ActionType::Settings;
             else if (kind == L"Command") ctx->target->action.type = ActionType::Command;
             else if (kind == L"Keys" || IsSystemKeyKind(kind) || kind == L"メディアコントロール") ctx->target->action.type = ActionType::Keys;
