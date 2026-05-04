@@ -730,10 +730,20 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
             MoveToEx(hdc, left + side * 5 / 6, midY - side / 6, nullptr);
             LineTo(hdc, left + side * 2 / 3, midY + side / 6);
         } else {
-            RECT markRect{ left + side * 3 / 5, top + side / 4, left + side, top + side * 3 / 4 };
-            DrawCenteredText(hdc, markRect,
-                volumeUpFast ? L"++" : volumeDownFast ? L"--" : volumeUp ? L"+" : L"-",
-                volumeUpFast || volumeDownFast ? 17 : 22, true);
+            const int markY = midY;
+            const int markHalf = std::max(5, side / 10);
+            const int firstX = left + side * 2 / 3;
+            const int secondX = left + side * 5 / 6;
+            const int count = volumeUpFast || volumeDownFast ? 2 : 1;
+            for (int i = 0; i < count; ++i) {
+                const int markX = count == 1 ? left + side * 3 / 4 : (i == 0 ? firstX : secondX);
+                MoveToEx(hdc, markX - markHalf, markY, nullptr);
+                LineTo(hdc, markX + markHalf, markY);
+                if (volumeUp || volumeUpFast) {
+                    MoveToEx(hdc, markX, markY - markHalf, nullptr);
+                    LineTo(hdc, markX, markY + markHalf);
+                }
+            }
         }
     } else if (screenshot) {
         RoundRect(hdc, left + side / 8, top + side / 4, left + side * 7 / 8, top + side * 3 / 4, 6, 6);
