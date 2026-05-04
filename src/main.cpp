@@ -89,6 +89,7 @@ struct AppState {
     bool altTabActive = false;
     bool pendingAltTabSwitch = false;
     bool pendingAltTabReverse = false;
+    HHOOK altTabMouseHook = nullptr;
 };
 
 static AppState g;
@@ -127,6 +128,7 @@ static constexpr int IDM_ADD_PAGE = 1009;
 static constexpr int IDM_EDIT_BASE = 2000;
 static constexpr int IDM_CLEAR_BASE = 2400;
 static constexpr UINT WM_TRAYICON = WM_APP + 1;
+static constexpr UINT WM_ALT_TAB_HOOK_CLICK = WM_APP + 2;
 
 static constexpr int HEADER_HEIGHT = 40;
 static constexpr int HEADER_BUTTON_SIZE = 30;
@@ -1285,9 +1287,16 @@ static void SendVirtualKey(WORD vk, bool keyUp = false) {
     SendInput(1, &in, sizeof(INPUT));
 }
 
+static void UninstallAltTabMouseHook() {
+    if (!g.altTabMouseHook) return;
+    UnhookWindowsHookEx(g.altTabMouseHook);
+    g.altTabMouseHook = nullptr;
+}
+
 static void ReleaseAltTabHold() {
     if (!g.altTabActive) return;
     KillTimer(g.hwnd, IDT_ALT_TAB_RELEASE);
+    UninstallAltTabMouseHook();
     SendVirtualKey(VK_MENU, true);
     g.altTabActive = false;
 }
@@ -1301,7 +1310,7 @@ static void SendAltTabSwitch(bool reverse) {
     SendVirtualKey(VK_TAB);
     SendVirtualKey(VK_TAB, true);
     if (reverse) SendVirtualKey(VK_SHIFT, true);
-    if (g.hwnd) SetTimer(g.hwnd, IDT_ALT_TAB_RELEASE, 1200, nullptr);
+    if (g.hwnd) SetTimer(g.hwnd, IDT_ALT_TAB_RELEASE, 2500, nullptr);
 }
 
 static void SendKeySpec(const std::wstring& spec) {
@@ -1369,12 +1378,36 @@ static void QueueAltTabSwitch(bool reverse) {
     SetCapture(g.hwnd);
 }
 
+static LRESULT CALLBACK AltTabMouseHookProc(int code, WPARAM wp, LPARAM lp) {
+    if (code >= 0 && g.altTabActive && (wp == WM_LBUTTONDOWN || wp == WM_LBUTTONUP)) {
+        auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lp);
+        POINT pt = info->pt;
+        if (g.hwnd && ScreenToClient(g.hwnd, &pt)) {
+            int index = HitButton(pt);
+            auto& buttons = CurrentButtons();
+            if (index >= 0 && index < static_cast<int>(buttons.size()) && IsAltTabSwitchAction(buttons[index].action)) {
+                if (wp == WM_LBUTTONDOWN) {
+                    PostMessageW(g.hwnd, WM_ALT_TAB_HOOK_CLICK, buttons[index].action.target == L"ALT_TAB_PREV", 0);
+                }
+                return 1;
+            }
+        }
+    }
+    return CallNextHookEx(g.altTabMouseHook, code, wp, lp);
+}
+
+static void InstallAltTabMouseHook() {
+    if (g.altTabMouseHook) return;
+    g.altTabMouseHook = SetWindowsHookExW(WH_MOUSE_LL, AltTabMouseHookProc, g.instance, 0);
+}
+
 static void SendQueuedAltTabSwitch() {
     if (!g.pendingAltTabSwitch) return;
     bool reverse = g.pendingAltTabReverse;
     g.pendingAltTabSwitch = false;
     g.pendingAltTabReverse = false;
     SendAltTabSwitch(reverse);
+    InstallAltTabMouseHook();
 }
 
 static std::wstring BrowseForImage(HWND owner) {
@@ -2981,6 +3014,9 @@ static void ShowContextMenu(POINT pt, int buttonIndex, bool pageTitle) {
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_ALT_TAB_HOOK_CLICK:
+        SendAltTabSwitch(wp != 0);
+        return 0;
     case WM_CREATE: {
         g.hwnd = hwnd;
         INITCOMMONCONTROLSEX icex{};
