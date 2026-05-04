@@ -54,6 +54,7 @@ struct AppConfig {
     int windowY = CW_USEDEFAULT;
     bool alwaysOnTop = true;
     bool showTrayIcon = false;
+    std::vector<int> pageOrder;
     std::map<int, std::wstring> pageNames;
     std::map<int, std::vector<ButtonConfig>> pages;
 };
@@ -142,6 +143,9 @@ static constexpr int IDC_DELETE_PAGE = 3108;
 static constexpr int IDC_CLEAR_BUTTON = 3109;
 static constexpr int IDC_RUN_ON_STARTUP = 3110;
 static constexpr int IDC_ADD_PAGE = 3111;
+static constexpr int IDC_PAGE_LIST = 3112;
+static constexpr int IDC_PAGE_MOVE_UP = 3113;
+static constexpr int IDC_PAGE_MOVE_DOWN = 3114;
 
 static std::wstring Utf8ToWide(const std::string& value) {
     if (value.empty()) return L"";
@@ -157,6 +161,28 @@ static std::wstring Trim(const std::wstring& s) {
     if (start == std::wstring::npos) return L"";
     const size_t end = s.find_last_not_of(ws);
     return s.substr(start, end - start + 1);
+}
+
+static std::vector<int> ParsePageOrder(const std::wstring& value) {
+    std::vector<int> order;
+    std::wstringstream ss(value);
+    std::wstring token;
+    while (std::getline(ss, token, L',')) {
+        int page = _wtoi(Trim(token).c_str());
+        if (page >= 0 && std::find(order.begin(), order.end(), page) == order.end()) {
+            order.push_back(page);
+        }
+    }
+    return order;
+}
+
+static std::wstring JoinPageOrder(const std::vector<int>& order) {
+    std::wstring value;
+    for (int page : order) {
+        if (!value.empty()) value += L",";
+        value += std::to_wstring(page);
+    }
+    return value;
 }
 
 static std::wstring ActionToString(ActionType type) {
@@ -238,6 +264,30 @@ static void EnsureDefaults() {
     buttons[1].action.target = L"ms-settings:";
 }
 
+static void NormalizePageOrder() {
+    std::vector<int> actualPages;
+    for (const auto& pagePair : g.config.pages) {
+        if (pagePair.first >= 0) actualPages.push_back(pagePair.first);
+    }
+    if (actualPages.empty()) actualPages.push_back(0);
+    std::sort(actualPages.begin(), actualPages.end());
+    actualPages.erase(std::unique(actualPages.begin(), actualPages.end()), actualPages.end());
+
+    std::vector<int> order;
+    for (int page : g.config.pageOrder) {
+        if (std::binary_search(actualPages.begin(), actualPages.end(), page) &&
+            std::find(order.begin(), order.end(), page) == order.end()) {
+            order.push_back(page);
+        }
+    }
+    for (int page : actualPages) {
+        if (std::find(order.begin(), order.end(), page) == order.end()) {
+            order.push_back(page);
+        }
+    }
+    g.config.pageOrder = order;
+}
+
 static void LoadConfig() {
     g.configPath = GetConfigPath();
     wchar_t sections[32768]{};
@@ -251,6 +301,9 @@ static void LoadConfig() {
     g.config.windowY = GetPrivateProfileIntW(L"Window", L"Y", CW_USEDEFAULT, g.configPath.c_str());
     g.config.alwaysOnTop = GetPrivateProfileIntW(L"Window", L"AlwaysOnTop", 1, g.configPath.c_str()) != 0;
     g.config.showTrayIcon = GetPrivateProfileIntW(L"Window", L"ShowTrayIcon", 0, g.configPath.c_str()) != 0;
+    wchar_t pageOrder[4096]{};
+    GetPrivateProfileStringW(L"Window", L"PageOrder", L"", pageOrder, 4096, g.configPath.c_str());
+    g.config.pageOrder = ParsePageOrder(pageOrder);
     int uiVersion = GetPrivateProfileIntW(L"Window", L"UiVersion", 0, g.configPath.c_str());
     if (uiVersion < 2) {
         if (g.config.buttonSize <= 78) g.config.buttonSize = 104;
@@ -283,9 +336,11 @@ static void LoadConfig() {
         buttons[index].action.args = value;
     }
     EnsureDefaults();
+    NormalizePageOrder();
 }
 
 static void SaveConfig() {
+    NormalizePageOrder();
     WritePrivateProfileStringW(L"Window", L"Rows", std::to_wstring(g.config.rows).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"Cols", std::to_wstring(g.config.cols).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ButtonSize", std::to_wstring(g.config.buttonSize).c_str(), g.configPath.c_str());
@@ -295,6 +350,7 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ShowTrayIcon", g.config.showTrayIcon ? L"1" : L"0", g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"UiVersion", L"2", g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"PageOrder", JoinPageOrder(g.config.pageOrder).c_str(), g.configPath.c_str());
 
     for (const auto& pageName : g.config.pageNames) {
         std::wstring section = L"Page:" + std::to_wstring(pageName.first);
@@ -354,25 +410,38 @@ static RECT HeaderTitleRect() {
 }
 
 static std::vector<int> ExistingPages() {
-    std::vector<int> pages;
-    for (const auto& pagePair : g.config.pages) {
-        if (pagePair.first >= 0) pages.push_back(pagePair.first);
-    }
-    if (pages.empty()) pages.push_back(0);
-    std::sort(pages.begin(), pages.end());
-    pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
-    return pages;
+    NormalizePageOrder();
+    return g.config.pageOrder;
 }
 
-static int AddPage() {
+static int NextPageIndex() {
     std::vector<int> pages = ExistingPages();
-    int newPage = pages.empty() ? 0 : pages.back() + 1;
+    int maxPage = -1;
+    for (int page : pages) maxPage = std::max(maxPage, page);
+    for (const auto& pagePair : g.config.pages) maxPage = std::max(maxPage, pagePair.first);
+    return maxPage + 1;
+}
+
+static int AddPageAfter(int afterPage) {
+    int newPage = NextPageIndex();
     auto& buttons = g.config.pages[newPage];
     buttons.clear();
     buttons.resize(g.config.rows * g.config.cols);
     g.config.pageNames.erase(newPage);
+    NormalizePageOrder();
+    g.config.pageOrder.erase(std::remove(g.config.pageOrder.begin(), g.config.pageOrder.end(), newPage), g.config.pageOrder.end());
+    auto it = std::find(g.config.pageOrder.begin(), g.config.pageOrder.end(), afterPage);
+    if (it == g.config.pageOrder.end()) {
+        g.config.pageOrder.push_back(newPage);
+    } else {
+        g.config.pageOrder.insert(it + 1, newPage);
+    }
     g.currentPage = newPage;
     return newPage;
+}
+
+static int AddPage() {
+    return AddPageAfter(g.currentPage);
 }
 
 static void DeletePageSectionsFromConfigFile(int page) {
@@ -405,6 +474,7 @@ static bool DeletePage(int page) {
 
     g.config.pages.erase(page);
     g.config.pageNames.erase(page);
+    g.config.pageOrder.erase(std::remove(g.config.pageOrder.begin(), g.config.pageOrder.end(), page), g.config.pageOrder.end());
     DeletePageSectionsFromConfigFile(page);
     g.currentPage = nextPage;
     CurrentButtons();
@@ -1968,10 +2038,93 @@ static void ShowSettingsDialog() {
 }
 
 struct PageSettingsContext {
-    int pageIndex = 0;
+    std::vector<int> pages;
+    std::map<int, std::wstring> pageNames;
+    int selectedPage = 0;
     bool accepted = false;
-    bool deleted = false;
 };
+
+static std::wstring PageNameFromMap(int page, const std::map<int, std::wstring>& pageNames) {
+    auto it = pageNames.find(page);
+    if (it != pageNames.end()) {
+        std::wstring name = Trim(it->second);
+        if (!name.empty()) return name;
+    }
+    return DefaultPageName(page);
+}
+
+static int SelectedPageListIndex(HWND hwnd) {
+    HWND list = GetDlgItem(hwnd, IDC_PAGE_LIST);
+    return static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+}
+
+static void SaveSelectedPageName(HWND hwnd, PageSettingsContext* ctx) {
+    if (!ctx || ctx->selectedPage < 0) return;
+    ctx->pageNames[ctx->selectedPage] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
+}
+
+static void SetSelectedPageNameEdit(HWND hwnd, PageSettingsContext* ctx) {
+    if (!ctx || ctx->selectedPage < 0) return;
+    SetWindowTextW(GetDlgItem(hwnd, IDC_PAGE_NAME), PageNameFromMap(ctx->selectedPage, ctx->pageNames).c_str());
+}
+
+static void FillPageList(HWND hwnd, PageSettingsContext* ctx) {
+    if (!ctx) return;
+    HWND list = GetDlgItem(hwnd, IDC_PAGE_LIST);
+    SendMessageW(list, LB_RESETCONTENT, 0, 0);
+    int selectedIndex = 0;
+    for (int i = 0; i < static_cast<int>(ctx->pages.size()); ++i) {
+        int page = ctx->pages[i];
+        std::wstring label = std::to_wstring(i + 1) + L". " + PageNameFromMap(page, ctx->pageNames);
+        int item = static_cast<int>(SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str())));
+        SendMessageW(list, LB_SETITEMDATA, item, static_cast<LPARAM>(page));
+        if (page == ctx->selectedPage) selectedIndex = item;
+    }
+    if (!ctx->pages.empty()) {
+        SendMessageW(list, LB_SETCURSEL, selectedIndex, 0);
+        ctx->selectedPage = ctx->pages[std::min<int>(selectedIndex, static_cast<int>(ctx->pages.size()) - 1)];
+        SetSelectedPageNameEdit(hwnd, ctx);
+    }
+}
+
+static void SelectPageInSettings(HWND hwnd, PageSettingsContext* ctx, int page) {
+    if (!ctx || ctx->pages.empty()) return;
+    ctx->selectedPage = page;
+    FillPageList(hwnd, ctx);
+}
+
+static void ApplyPageSettings(PageSettingsContext* ctx) {
+    if (!ctx || ctx->pages.empty()) return;
+
+    std::vector<int> previousPages = ExistingPages();
+    for (int page : previousPages) {
+        if (std::find(ctx->pages.begin(), ctx->pages.end(), page) == ctx->pages.end()) {
+            g.config.pages.erase(page);
+            g.config.pageNames.erase(page);
+            DeletePageSectionsFromConfigFile(page);
+        }
+    }
+    for (int page : ctx->pages) {
+        auto& buttons = g.config.pages[page];
+        if (buttons.empty()) buttons.resize(g.config.rows * g.config.cols);
+    }
+
+    g.config.pageNames.clear();
+    for (int page : ctx->pages) {
+        auto it = ctx->pageNames.find(page);
+        if (it != ctx->pageNames.end()) {
+            g.config.pageNames[page] = it->second;
+        }
+    }
+    g.config.pageOrder = ctx->pages;
+    NormalizePageOrder();
+
+    if (std::find(g.config.pageOrder.begin(), g.config.pageOrder.end(), g.currentPage) == g.config.pageOrder.end()) {
+        auto it = std::find(g.config.pageOrder.begin(), g.config.pageOrder.end(), ctx->selectedPage);
+        g.currentPage = it == g.config.pageOrder.end() ? g.config.pageOrder.front() : ctx->selectedPage;
+    }
+    CurrentButtons();
+}
 
 static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     PageSettingsContext* ctx = reinterpret_cast<PageSettingsContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -1980,34 +2133,84 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<PageSettingsContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Page", 32, 28, 180, 28);
-        AddLabel(hwnd, L"Name", 56, 78, 150, 28);
-        AddEdit(hwnd, IDC_PAGE_NAME, PageName(ctx->pageIndex), 220, 74, 330, 34);
-        AddButton(hwnd, IDC_DELETE_PAGE, L"Delete page", 56, 154, 150, 38);
-        AddButton(hwnd, IDC_ADD_PAGE, L"Add page", 220, 154, 150, 38);
-        AddButton(hwnd, IDOK, L"OK", 338, 210, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 446, 210, 104, 38);
+        AddLabel(hwnd, L"Pages", 32, 24, 180, 28);
+        HWND list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
+            56, 62, 260, 268, hwnd, ControlId(IDC_PAGE_LIST), g.instance, nullptr);
+        SetControlFont(list);
+
+        AddButton(hwnd, IDC_ADD_PAGE, L"Add page", 340, 62, 130, 36);
+        AddButton(hwnd, IDC_DELETE_PAGE, L"Delete page", 484, 62, 130, 36);
+        AddButton(hwnd, IDC_PAGE_MOVE_UP, L"Move up", 340, 112, 130, 36);
+        AddButton(hwnd, IDC_PAGE_MOVE_DOWN, L"Move down", 484, 112, 130, 36);
+
+        AddLabel(hwnd, L"Name", 340, 184, 130, 28);
+        AddEdit(hwnd, IDC_PAGE_NAME, L"", 340, 222, 274, 34);
+        AddButton(hwnd, IDOK, L"OK", 406, 330, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 514, 330, 100, 38);
+        FillPageList(hwnd, ctx);
         return 0;
     }
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_PAGE_LIST && HIWORD(wp) == LBN_SELCHANGE && ctx) {
+            SaveSelectedPageName(hwnd, ctx);
+            int sel = SelectedPageListIndex(hwnd);
+            if (sel >= 0) {
+                ctx->selectedPage = static_cast<int>(SendMessageW(GetDlgItem(hwnd, IDC_PAGE_LIST), LB_GETITEMDATA, sel, 0));
+                SetSelectedPageNameEdit(hwnd, ctx);
+            }
+            return 0;
+        }
         if (LOWORD(wp) == IDOK && ctx) {
-            g.config.pageNames[ctx->pageIndex] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
+            SaveSelectedPageName(hwnd, ctx);
+            ApplyPageSettings(ctx);
             ctx->accepted = true;
             DestroyWindow(hwnd);
             return 0;
         }
         if (LOWORD(wp) == IDC_DELETE_PAGE && ctx) {
-            if (ctx->pageIndex == g.currentPage && ConfirmAndDeleteCurrentPage(hwnd)) {
-                ctx->accepted = true;
-                DestroyWindow(hwnd);
+            if (ctx->pages.size() <= 1) {
+                MessageBoxW(hwnd, L"The last page cannot be deleted.", L"Delete page", MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+            SaveSelectedPageName(hwnd, ctx);
+            std::wstring message = L"Delete \"" + PageNameFromMap(ctx->selectedPage, ctx->pageNames) + L"\" and all buttons on this page?";
+            if (MessageBoxW(hwnd, message.c_str(), L"Delete page", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES) {
+                auto it = std::find(ctx->pages.begin(), ctx->pages.end(), ctx->selectedPage);
+                if (it != ctx->pages.end()) {
+                    size_t index = static_cast<size_t>(std::distance(ctx->pages.begin(), it));
+                    ctx->pages.erase(it);
+                    ctx->pageNames.erase(ctx->selectedPage);
+                    if (index >= ctx->pages.size()) index = ctx->pages.size() - 1;
+                    SelectPageInSettings(hwnd, ctx, ctx->pages[index]);
+                }
             }
             return 0;
         }
         if (LOWORD(wp) == IDC_ADD_PAGE && ctx) {
-            g.config.pageNames[ctx->pageIndex] = GetWindowTextString(GetDlgItem(hwnd, IDC_PAGE_NAME));
-            AddPage();
-            ctx->accepted = true;
-            DestroyWindow(hwnd);
+            SaveSelectedPageName(hwnd, ctx);
+            int newPage = NextPageIndex();
+            for (int page : ctx->pages) newPage = std::max(newPage, page + 1);
+            auto it = std::find(ctx->pages.begin(), ctx->pages.end(), ctx->selectedPage);
+            if (it == ctx->pages.end()) {
+                ctx->pages.push_back(newPage);
+            } else {
+                ctx->pages.insert(it + 1, newPage);
+            }
+            SelectPageInSettings(hwnd, ctx, newPage);
+            return 0;
+        }
+        if ((LOWORD(wp) == IDC_PAGE_MOVE_UP || LOWORD(wp) == IDC_PAGE_MOVE_DOWN) && ctx) {
+            SaveSelectedPageName(hwnd, ctx);
+            auto it = std::find(ctx->pages.begin(), ctx->pages.end(), ctx->selectedPage);
+            if (it != ctx->pages.end()) {
+                if (LOWORD(wp) == IDC_PAGE_MOVE_UP && it != ctx->pages.begin()) {
+                    std::iter_swap(it, it - 1);
+                } else if (LOWORD(wp) == IDC_PAGE_MOVE_DOWN && it + 1 != ctx->pages.end()) {
+                    std::iter_swap(it, it + 1);
+                }
+                SelectPageInSettings(hwnd, ctx, ctx->selectedPage);
+            }
             return 0;
         }
         if (LOWORD(wp) == IDCANCEL) {
@@ -2030,7 +2233,9 @@ static LRESULT CALLBACK PageSettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 
 static void ShowPageSettingsDialog() {
     PageSettingsContext ctx{};
-    ctx.pageIndex = g.currentPage;
+    ctx.pages = ExistingPages();
+    ctx.pageNames = g.config.pageNames;
+    ctx.selectedPage = std::find(ctx.pages.begin(), ctx.pages.end(), g.currentPage) == ctx.pages.end() ? ctx.pages.front() : g.currentPage;
     static bool registered = false;
     if (!registered) {
         WNDCLASSW wc{};
@@ -2043,7 +2248,7 @@ static void ShowPageSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherPageSettingsEditor", L"Page Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 590, 320,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 660, 430,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
