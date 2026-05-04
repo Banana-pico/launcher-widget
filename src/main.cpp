@@ -79,6 +79,7 @@ struct AppState {
     HINSTANCE instance = nullptr;
     HWND hwnd = nullptr;
     HFONT uiFont = nullptr;
+    HFONT keyFont = nullptr;
     AppConfig config;
     int currentPage = 0;
     std::wstring configPath;
@@ -104,6 +105,11 @@ static void InitUiFont() {
     lf.lfWeight = FW_NORMAL;
     wcscpy_s(lf.lfFaceName, L"Segoe UI");
     g.uiFont = CreateFontIndirectW(&lf);
+
+    HDC keyHdc = GetDC(nullptr);
+    lf.lfHeight = -MulDiv(9, GetDeviceCaps(keyHdc, LOGPIXELSY), 72);
+    ReleaseDC(nullptr, keyHdc);
+    g.keyFont = CreateFontIndirectW(&lf);
 }
 
 static constexpr int IDM_PAGE_PREV = 1001;
@@ -170,6 +176,7 @@ static constexpr int IDC_KEY_ALT = 3204;
 static constexpr int IDC_KEY_SHIFT = 3205;
 static constexpr int IDC_KEY_WIN = 3206;
 static constexpr int IDC_KEY_CLEAR = 3207;
+static constexpr int IDC_KEY_LAYOUT = 3208;
 static constexpr int IDC_KEY_BUTTON_BASE = 6000;
 
 static std::wstring Utf8ToWide(const std::string& value) {
@@ -882,6 +889,7 @@ static std::wstring CompactKeySpec(std::wstring spec) {
         if (token == L"BACKSPACE") token = L"BACK";
         if (token == L"PAGEUP") token = L"PGUP";
         if (token == L"PAGEDOWN") token = L"PGDN";
+        if (token == L"OEM_102") token = L"\\";
         if (!compact.empty()) compact += L"+";
         compact += token;
     }
@@ -2215,7 +2223,7 @@ static const KeyChoice kKeyChoices[] = {
     { L"Shift", L"Shift", L"SHIFT", 0, 4, 2 }, { L"Z", L"Z", L"Z", 2, 4, 1 }, { L"X", L"X", L"X", 3, 4, 1 }, { L"C", L"C", L"C", 4, 4, 1 },
     { L"V", L"V", L"V", 5, 4, 1 }, { L"B", L"B", L"B", 6, 4, 1 }, { L"N", L"N", L"N", 7, 4, 1 }, { L"M", L"M", L"M", 8, 4, 1 },
     { L",", L",", L"OEM_COMMA", 9, 4, 1 }, { L".", L".", L"OEM_PERIOD", 10, 4, 1 }, { L"/", L"/", L"OEM_2", 11, 4, 1 },
-    { L"Intl", L"Yen", L"OEM_102", 12, 4, 1 }, { L"Shift", L"Shift", L"SHIFT", 13, 4, 2 },
+    { L"Intl", L"\\", L"OEM_102", 12, 4, 1 }, { L"Shift", L"Shift", L"SHIFT", 13, 4, 2 },
     { L"Up", L"Up", L"UP", 18, 4, 1 }, { L"1", L"1", L"NUM1", 21, 4, 1 }, { L"2", L"2", L"NUM2", 22, 4, 1 }, { L"3", L"3", L"NUM3", 23, 4, 1 },
 
     { L"Ctrl", L"Ctrl", L"CTRL", 0, 5, 2 }, { L"Win", L"Win", L"WIN", 2, 5, 1 }, { L"Alt", L"Alt", L"ALT", 3, 5, 2 },
@@ -2226,8 +2234,19 @@ static const KeyChoice kKeyChoices[] = {
 
 struct KeyPickerContext {
     std::wstring spec;
+    int keyboardLayout = 106;
     bool accepted = false;
 };
+
+static const wchar_t* KeyPickerLabel(const KeyChoice& key, int keyboardLayout) {
+    return keyboardLayout == 101 ? key.label101 : key.label106;
+}
+
+static void RefreshKeyPickerLayout(HWND hwnd, int keyboardLayout) {
+    for (int i = 0; i < static_cast<int>(sizeof(kKeyChoices) / sizeof(kKeyChoices[0])); ++i) {
+        SetWindowTextW(GetDlgItem(hwnd, IDC_KEY_BUTTON_BASE + i), KeyPickerLabel(kKeyChoices[i], keyboardLayout));
+    }
+}
 
 static std::wstring KeyPickerChord(HWND hwnd, const wchar_t* token) {
     std::wstring chord;
@@ -2277,6 +2296,11 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         AddCheckWithReadableLabel(hwnd, IDC_KEY_ALT, L"Alt", 366, 18, 42);
         AddCheckWithReadableLabel(hwnd, IDC_KEY_SHIFT, L"Shift", 446, 18, 58);
         AddCheckWithReadableLabel(hwnd, IDC_KEY_WIN, L"Win", 546, 18, 42);
+        AddLabel(hwnd, L"配列", 610, 22, 46, 24);
+        HWND layout = AddCombo(hwnd, IDC_KEY_LAYOUT, 656, 18, 112, 160);
+        SendMessageW(layout, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"106"));
+        SendMessageW(layout, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"101"));
+        SendMessageW(layout, CB_SETCURSEL, ctx->keyboardLayout == 101 ? 1 : 0, 0);
         AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 760, 34);
         AddButton(hwnd, IDC_KEY_CLEAR, L"クリア", 800, 62, 92, 34);
 
@@ -2286,8 +2310,8 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             int x = 24 + kKeyChoices[i].col * unit;
             int y = 116 + kKeyChoices[i].row * 42;
             int w = kKeyChoices[i].units * unit - 4;
-            const wchar_t* label = g.config.keyboardLayout == 101 ? kKeyChoices[i].label101 : kKeyChoices[i].label106;
-            AddButton(hwnd, IDC_KEY_BUTTON_BASE + i, label, x, y, w, h);
+            HWND keyButton = AddButton(hwnd, IDC_KEY_BUTTON_BASE + i, KeyPickerLabel(kKeyChoices[i], ctx->keyboardLayout), x, y, w, h);
+            if (g.keyFont) SendMessageW(keyButton, WM_SETFONT, reinterpret_cast<WPARAM>(g.keyFont), TRUE);
         }
         AddButton(hwnd, IDOK, L"OK", 1030, 590, 96, 38, BS_DEFPUSHBUTTON);
         AddButton(hwnd, IDCANCEL, L"キャンセル", 1138, 590, 116, 38);
@@ -2304,8 +2328,14 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetWindowTextW(GetDlgItem(hwnd, IDC_KEY_SPEC), L"");
             return 0;
         }
+        if (id == IDC_KEY_LAYOUT && HIWORD(wp) == CBN_SELCHANGE && ctx) {
+            ctx->keyboardLayout = ComboText(GetDlgItem(hwnd, IDC_KEY_LAYOUT)) == L"101" ? 101 : 106;
+            RefreshKeyPickerLayout(hwnd, ctx->keyboardLayout);
+            return 0;
+        }
         if (id == IDOK && ctx) {
             ctx->spec = GetWindowTextString(GetDlgItem(hwnd, IDC_KEY_SPEC));
+            ctx->keyboardLayout = ComboText(GetDlgItem(hwnd, IDC_KEY_LAYOUT)) == L"101" ? 101 : 106;
             ctx->accepted = true;
             DestroyWindow(hwnd);
             return 0;
@@ -2332,6 +2362,7 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 static std::wstring ChooseKeySpec(HWND owner, const std::wstring& current) {
     KeyPickerContext ctx{};
     ctx.spec = current;
+    ctx.keyboardLayout = g.config.keyboardLayout;
     static bool registered = false;
     if (!registered) {
         WNDCLASSW wc{};
@@ -2347,6 +2378,10 @@ static std::wstring ChooseKeySpec(HWND owner, const std::wstring& current) {
         WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 690,
         owner, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
+    if (ctx.accepted) {
+        g.config.keyboardLayout = ctx.keyboardLayout;
+        SaveConfig();
+    }
     return ctx.accepted ? ctx.spec : L"";
 }
 
@@ -2564,19 +2599,14 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 230, 170, 160, 34);
         AddLabel(hwnd, L"Gap", 56, 222, 150, 28);
         AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 230, 218, 160, 34);
-        AddLabel(hwnd, L"Keyboard", 56, 270, 150, 28);
-        HWND keyboard = AddCombo(hwnd, IDC_KEYBOARD_LAYOUT, 230, 266, 160, 120);
-        SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"106"));
-        SendMessageW(keyboard, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"101"));
-        SendMessageW(keyboard, CB_SETCURSEL, ctx->original.keyboardLayout == 101 ? 1 : 0, 0);
-        AddCheckWithReadableLabel(hwnd, IDC_TOPMOST, L"Always on top", 230, 322, 220);
+        AddCheckWithReadableLabel(hwnd, IDC_TOPMOST, L"Always on top", 230, 278, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddCheckWithReadableLabel(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 366, 220);
+        AddCheckWithReadableLabel(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 322, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddCheckWithReadableLabel(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 410, 260);
+        AddCheckWithReadableLabel(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 366, 260);
         SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_SETCHECK, IsRunOnStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDOK, L"OK", 344, 468, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 468, 104, 38);
+        AddButton(hwnd, IDOK, L"OK", 344, 424, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 424, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -2585,7 +2615,6 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g.config.cols = std::max(1, std::min(12, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_COLS)).c_str())));
             g.config.buttonSize = std::max(64, std::min(220, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_BUTTON_SIZE)).c_str())));
             g.config.gap = std::max(4, std::min(32, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_GAP)).c_str())));
-            g.config.keyboardLayout = ComboText(GetDlgItem(hwnd, IDC_KEYBOARD_LAYOUT)) == L"101" ? 101 : 106;
             g.config.alwaysOnTop = SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED;
             g.config.showTrayIcon = SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_GETCHECK, 0, 0) == BST_CHECKED;
             SetRunOnStartup(SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -2626,7 +2655,7 @@ static void ShowSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherSettingsEditor", L"Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 570,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 526,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
@@ -3090,6 +3119,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     }
     for (auto& ic : g.currentIcons) ic.Clear();
     g.currentIcons.clear();
+    if (g.keyFont) DeleteObject(g.keyFont);
     if (g.uiFont) DeleteObject(g.uiFont);
     if (SUCCEEDED(comInit)) CoUninitialize();
     return static_cast<int>(msg.wParam);
