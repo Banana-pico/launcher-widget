@@ -197,6 +197,11 @@ static constexpr int IDC_KEY_CLEAR = 3207;
 static constexpr int IDC_KEY_LAYOUT = 3208;
 static constexpr int IDC_KEY_ALTTAB_NEXT = 3209;
 static constexpr int IDC_KEY_ALTTAB_PREV = 3210;
+static constexpr int IDC_FAVORITE_SEARCH = 4301;
+static constexpr int IDC_FAVORITE_LIST = 4302;
+static constexpr int IDC_FAVORITE_COUNT = 4303;
+static constexpr int IDC_FAVORITE_TITLE = 4304;
+static constexpr int IDC_FAVORITE_URL = 4305;
 static constexpr int IDC_KEY_BUTTON_BASE = 6000;
 static constexpr UINT_PTR IDT_ALT_TAB_RELEASE = 4101;
 static constexpr UINT_PTR IDT_ALT_TAB_SEND = 4102;
@@ -2379,8 +2384,21 @@ static void CollectChromiumBookmarks(const std::wstring& path, std::vector<Favor
             links.push_back({ title, url });
         }
         pos = last + 1;
-        if (links.size() >= 80) break;
     }
+}
+
+static void CollectChromiumBookmarkProfiles(const std::wstring& userDataDir, std::vector<FavoriteLink>& links) {
+    CollectChromiumBookmarks(userDataDir + L"\\Default\\Bookmarks", links);
+
+    std::wstring pattern = userDataDir + L"\\Profile *";
+    WIN32_FIND_DATAW fd{};
+    HANDLE find = FindFirstFileW(pattern.c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        CollectChromiumBookmarks(userDataDir + L"\\" + fd.cFileName + L"\\Bookmarks", links);
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
 }
 
 static bool ResolveShortcutTarget(const std::wstring& shortcutPath, std::wstring& target, std::wstring& args, std::wstring& iconPath) {
@@ -2531,9 +2549,23 @@ static std::vector<FavoriteLink> LoadBrowserFavorites() {
 
     std::wstring local = GetEnvPath(L"LOCALAPPDATA");
     if (!local.empty()) {
-        CollectChromiumBookmarks(local + L"\\Microsoft\\Edge\\User Data\\Default\\Bookmarks", links);
-        CollectChromiumBookmarks(local + L"\\Google\\Chrome\\User Data\\Default\\Bookmarks", links);
+        CollectChromiumBookmarkProfiles(local + L"\\Microsoft\\Edge\\User Data", links);
+        CollectChromiumBookmarkProfiles(local + L"\\Google\\Chrome\\User Data", links);
     }
+
+    std::sort(links.begin(), links.end(), [](const FavoriteLink& a, const FavoriteLink& b) {
+        int urlCompare = _wcsicmp(a.url.c_str(), b.url.c_str());
+        if (urlCompare != 0) return urlCompare < 0;
+        return _wcsicmp(a.title.c_str(), b.title.c_str()) < 0;
+    });
+    links.erase(std::unique(links.begin(), links.end(), [](const FavoriteLink& a, const FavoriteLink& b) {
+        return _wcsicmp(a.url.c_str(), b.url.c_str()) == 0;
+    }), links.end());
+    std::sort(links.begin(), links.end(), [](const FavoriteLink& a, const FavoriteLink& b) {
+        int titleCompare = _wcsicmp(a.title.c_str(), b.title.c_str());
+        if (titleCompare != 0) return titleCompare < 0;
+        return _wcsicmp(a.url.c_str(), b.url.c_str()) < 0;
+    });
     return links;
 }
 
@@ -2749,6 +2781,166 @@ static void ApplyDisplayDefaults(HWND hwnd, const std::wstring& kind, bool force
     if (force) SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
 }
 
+struct FavoriteSelectorContext {
+    std::vector<FavoriteLink> links;
+    int selectedIndex = -1;
+    bool accepted = false;
+};
+
+static void RunOwnedModal(HWND dialog);
+
+static std::wstring LowerWide(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(towlower(c));
+    });
+    return value;
+}
+
+static bool FavoriteMatchesQuery(const FavoriteLink& link, const std::wstring& query) {
+    if (query.empty()) return true;
+    std::wstring haystack = LowerWide(link.title + L" " + HostFromUrl(link.url) + L" " + link.url);
+    return haystack.find(query) != std::wstring::npos;
+}
+
+static std::wstring FavoriteListLabel(const FavoriteLink& link) {
+    std::wstring title = Trim(link.title);
+    if (title.empty()) title = HostFromUrl(link.url);
+    if (title.empty()) title = link.url;
+    std::wstring host = HostFromUrl(link.url);
+    return title + L"\t" + host + L"\t" + link.url;
+}
+
+static void UpdateFavoriteDetails(HWND hwnd, FavoriteSelectorContext* ctx) {
+    if (!ctx) return;
+    HWND list = GetDlgItem(hwnd, IDC_FAVORITE_LIST);
+    int sel = static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+    int index = sel >= 0 ? static_cast<int>(SendMessageW(list, LB_GETITEMDATA, sel, 0)) : -1;
+    if (index >= 0 && index < static_cast<int>(ctx->links.size())) {
+        const FavoriteLink& link = ctx->links[index];
+        std::wstring title = Trim(link.title);
+        if (title.empty()) title = HostFromUrl(link.url);
+        if (title.empty()) title = link.url;
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FAVORITE_TITLE), title.c_str());
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FAVORITE_URL), link.url.c_str());
+    } else {
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FAVORITE_TITLE), L"");
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FAVORITE_URL), L"");
+    }
+}
+
+static void FillFavoriteList(HWND hwnd, FavoriteSelectorContext* ctx) {
+    if (!ctx) return;
+    HWND list = GetDlgItem(hwnd, IDC_FAVORITE_LIST);
+    SendMessageW(list, LB_RESETCONTENT, 0, 0);
+
+    std::wstring query = LowerWide(Trim(GetWindowTextString(GetDlgItem(hwnd, IDC_FAVORITE_SEARCH))));
+    int shown = 0;
+    int maxExtent = 0;
+    HDC hdc = GetDC(list);
+    HFONT oldFont = g.uiFont ? static_cast<HFONT>(SelectObject(hdc, g.uiFont)) : nullptr;
+    for (int i = 0; i < static_cast<int>(ctx->links.size()); ++i) {
+        const FavoriteLink& link = ctx->links[i];
+        if (!FavoriteMatchesQuery(link, query)) continue;
+        std::wstring label = FavoriteListLabel(link);
+        int item = static_cast<int>(SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str())));
+        SendMessageW(list, LB_SETITEMDATA, item, i);
+        SIZE size{};
+        if (GetTextExtentPoint32W(hdc, label.c_str(), static_cast<int>(label.size()), &size)) {
+            maxExtent = std::max(maxExtent, static_cast<int>(size.cx) + ScaleValue(40));
+        }
+        shown++;
+    }
+    if (oldFont) SelectObject(hdc, oldFont);
+    ReleaseDC(list, hdc);
+    SendMessageW(list, LB_SETHORIZONTALEXTENT, maxExtent, 0);
+
+    std::wstring count = std::to_wstring(shown) + L" / " + std::to_wstring(ctx->links.size()) + L" favorites";
+    SetWindowTextW(GetDlgItem(hwnd, IDC_FAVORITE_COUNT), count.c_str());
+    if (shown > 0) SendMessageW(list, LB_SETCURSEL, 0, 0);
+    UpdateFavoriteDetails(hwnd, ctx);
+}
+
+static LRESULT CALLBACK FavoriteSelectorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    FavoriteSelectorContext* ctx = reinterpret_cast<FavoriteSelectorContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (msg) {
+    case WM_CREATE: {
+        auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+        ctx = reinterpret_cast<FavoriteSelectorContext*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
+
+        AddLabel(hwnd, L"Search", 24, 20, 100, 26);
+        AddEdit(hwnd, IDC_FAVORITE_SEARCH, L"", 92, 16, 550, 34);
+        AddLabel(hwnd, L"", 660, 20, 170, 26, IDC_FAVORITE_COUNT);
+
+        HWND list = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
+            LBS_NOTIFY | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT | LBS_USETABSTOPS,
+            24, 62, 806, 330, hwnd, ControlId(IDC_FAVORITE_LIST), g.instance, nullptr);
+        SetControlFont(list);
+        int tabs[] = { 220, 400 };
+        SendMessageW(list, LB_SETTABSTOPS, static_cast<WPARAM>(std::size(tabs)), reinterpret_cast<LPARAM>(tabs));
+
+        AddLabel(hwnd, L"Title", 24, 410, 80, 26);
+        HWND title = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_READONLY,
+            92, 406, 738, 34, hwnd, ControlId(IDC_FAVORITE_TITLE), g.instance, nullptr);
+        SetControlFont(title);
+
+        AddLabel(hwnd, L"URL", 24, 456, 80, 26);
+        HWND url = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_READONLY,
+            92, 452, 738, 34, hwnd, ControlId(IDC_FAVORITE_URL), g.instance, nullptr);
+        SetControlFont(url);
+
+        AddButton(hwnd, IDOK, L"OK", 620, 510, 100, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 730, 510, 100, 38);
+
+        FillFavoriteList(hwnd, ctx);
+        SetFocus(GetDlgItem(hwnd, IDC_FAVORITE_SEARCH));
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_FAVORITE_SEARCH && HIWORD(wp) == EN_CHANGE) {
+            FillFavoriteList(hwnd, ctx);
+            return 0;
+        }
+        if (LOWORD(wp) == IDC_FAVORITE_LIST) {
+            if (HIWORD(wp) == LBN_SELCHANGE) {
+                UpdateFavoriteDetails(hwnd, ctx);
+            } else if (HIWORD(wp) == LBN_DBLCLK) {
+                SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDOK && ctx) {
+            HWND list = GetDlgItem(hwnd, IDC_FAVORITE_LIST);
+            int sel = static_cast<int>(SendMessageW(list, LB_GETCURSEL, 0, 0));
+            int index = sel >= 0 ? static_cast<int>(SendMessageW(list, LB_GETITEMDATA, sel, 0)) : -1;
+            if (index >= 0 && index < static_cast<int>(ctx->links.size())) {
+                ctx->selectedIndex = index;
+                ctx->accepted = true;
+                DestroyWindow(hwnd);
+            }
+            return 0;
+        }
+        if (LOWORD(wp) == IDCANCEL) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return DialogControlColor(wp);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return DialogFieldColor(wp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 static void ImportFavoriteUrl(HWND hwnd) {
     std::vector<FavoriteLink> links = LoadBrowserFavorites();
     if (links.empty()) {
@@ -2756,21 +2948,31 @@ static void ImportFavoriteUrl(HWND hwnd) {
         return;
     }
 
-    HMENU menu = CreatePopupMenu();
-    const int maxItems = std::min<int>(static_cast<int>(links.size()), 40);
-    for (int i = 0; i < maxItems; ++i) {
-        std::wstring label = links[i].title.empty() ? links[i].url : links[i].title;
-        if (label.size() > 72) label = label.substr(0, 69) + L"...";
-        AppendMenuW(menu, MF_STRING, 5000 + i, label.c_str());
+    FavoriteSelectorContext ctx{};
+    ctx.links = std::move(links);
+
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = FavoriteSelectorProc;
+        wc.hInstance = g.instance;
+        wc.lpszClassName = L"LauncherFavoriteSelector";
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = DialogBrush();
+        RegisterClassW(&wc);
+        registered = true;
     }
-    RECT rc{};
-    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
-    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
-    DestroyMenu(menu);
-    if (cmd >= 5000 && cmd < 5000 + maxItems) {
-        const FavoriteLink& link = links[cmd - 5000];
+
+    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherFavoriteSelector", L"Favorites",
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 880, 610,
+        hwnd, nullptr, g.instance, &ctx);
+    RunOwnedModal(dialog);
+
+    if (ctx.accepted && ctx.selectedIndex >= 0 && ctx.selectedIndex < static_cast<int>(ctx.links.size())) {
+        const FavoriteLink& link = ctx.links[ctx.selectedIndex];
         SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), link.url.c_str());
-        std::wstring title = link.title.empty() ? HostFromUrl(link.url) : link.title;
+        std::wstring title = Trim(link.title);
+        if (title.empty()) title = HostFromUrl(link.url);
         if (title.empty()) title = link.url;
         SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), title.c_str());
         SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), L"URL");
