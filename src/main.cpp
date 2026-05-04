@@ -59,6 +59,7 @@ struct AppConfig {
     int cols = 5;
     int buttonSize = 96;
     int gap = 10;
+    int scalePercent = 100;
     int windowX = CW_USEDEFAULT;
     int windowY = CW_USEDEFAULT;
     bool alwaysOnTop = true;
@@ -178,6 +179,7 @@ static constexpr int IDC_PAGE_LIST = 3112;
 static constexpr int IDC_PAGE_MOVE_UP = 3113;
 static constexpr int IDC_PAGE_MOVE_DOWN = 3114;
 static constexpr int IDC_KEYBOARD_LAYOUT = 3115;
+static constexpr int IDC_SCALE_PERCENT = 3116;
 static constexpr int IDC_KEY_MODE = 3201;
 static constexpr int IDC_KEY_SPEC = 3202;
 static constexpr int IDC_KEY_CTRL = 3203;
@@ -333,6 +335,26 @@ static void NormalizePageOrder() {
     g.config.pageOrder = order;
 }
 
+static int ClampScalePercent(int value) {
+    return std::max(75, std::min(160, value <= 0 ? 100 : value));
+}
+
+static int ScaleValue(int value) {
+    return std::max(1, MulDiv(value, ClampScalePercent(g.config.scalePercent), 100));
+}
+
+static int ScaledHeaderHeight() {
+    return ScaleValue(HEADER_HEIGHT);
+}
+
+static int ScaledButtonSize() {
+    return ScaleValue(g.config.buttonSize);
+}
+
+static int ScaledGap() {
+    return ScaleValue(g.config.gap);
+}
+
 static void LoadConfig() {
     g.configPath = GetConfigPath();
     wchar_t sections[32768]{};
@@ -342,6 +364,7 @@ static void LoadConfig() {
     g.config.cols = GetPrivateProfileIntW(L"Window", L"Cols", 5, g.configPath.c_str());
     g.config.buttonSize = GetPrivateProfileIntW(L"Window", L"ButtonSize", 96, g.configPath.c_str());
     g.config.gap = GetPrivateProfileIntW(L"Window", L"Gap", 10, g.configPath.c_str());
+    g.config.scalePercent = ClampScalePercent(GetPrivateProfileIntW(L"Window", L"ScalePercent", 100, g.configPath.c_str()));
     g.config.windowX = GetPrivateProfileIntW(L"Window", L"X", CW_USEDEFAULT, g.configPath.c_str());
     g.config.windowY = GetPrivateProfileIntW(L"Window", L"Y", CW_USEDEFAULT, g.configPath.c_str());
     g.config.alwaysOnTop = GetPrivateProfileIntW(L"Window", L"AlwaysOnTop", 1, g.configPath.c_str()) != 0;
@@ -391,6 +414,7 @@ static void SaveConfig() {
     WritePrivateProfileStringW(L"Window", L"Cols", std::to_wstring(g.config.cols).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"ButtonSize", std::to_wstring(g.config.buttonSize).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"Gap", std::to_wstring(g.config.gap).c_str(), g.configPath.c_str());
+    WritePrivateProfileStringW(L"Window", L"ScalePercent", std::to_wstring(ClampScalePercent(g.config.scalePercent)).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"X", std::to_wstring(g.config.windowX).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"Y", std::to_wstring(g.config.windowY).c_str(), g.configPath.c_str());
     WritePrivateProfileStringW(L"Window", L"AlwaysOnTop", g.config.alwaysOnTop ? L"1" : L"0", g.configPath.c_str());
@@ -421,28 +445,33 @@ static void SaveConfig() {
 static RECT ButtonRect(int index) {
     int row = index / g.config.cols;
     int col = index % g.config.cols;
-    int s = g.config.buttonSize;
-    int gap = g.config.gap;
+    int s = ScaledButtonSize();
+    int gap = ScaledGap();
+    int headerHeight = ScaledHeaderHeight();
     return RECT{
         gap + col * (s + gap),
-        HEADER_HEIGHT + gap + row * (s + gap),
+        headerHeight + gap + row * (s + gap),
         gap + col * (s + gap) + s,
-        HEADER_HEIGHT + gap + row * (s + gap) + s
+        headerHeight + gap + row * (s + gap) + s
     };
 }
 
 static RECT HeaderButtonRect(int slotFromRight) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
-    const int right = client.right - HEADER_BUTTON_GAP - slotFromRight * (HEADER_WINDOW_BUTTON_SIZE + HEADER_BUTTON_GAP);
-    const int top = (HEADER_HEIGHT - HEADER_WINDOW_BUTTON_SIZE) / 2;
-    return RECT{ right - HEADER_WINDOW_BUTTON_SIZE, top, right, top + HEADER_WINDOW_BUTTON_SIZE };
+    const int gap = ScaleValue(HEADER_BUTTON_GAP);
+    const int size = ScaleValue(HEADER_WINDOW_BUTTON_SIZE);
+    const int right = client.right - gap - slotFromRight * (size + gap);
+    const int top = (ScaledHeaderHeight() - size) / 2;
+    return RECT{ right - size, top, right, top + size };
 }
 
 static RECT HeaderPageButtonRect(bool next) {
-    const int left = HEADER_BUTTON_GAP + (next ? HEADER_PAGE_BUTTON_SIZE + HEADER_BUTTON_GAP : 0);
-    const int top = (HEADER_HEIGHT - HEADER_PAGE_BUTTON_SIZE) / 2;
-    return RECT{ left, top, left + HEADER_PAGE_BUTTON_SIZE, top + HEADER_PAGE_BUTTON_SIZE };
+    const int gap = ScaleValue(HEADER_BUTTON_GAP);
+    const int size = ScaleValue(HEADER_PAGE_BUTTON_SIZE);
+    const int left = gap + (next ? size + gap : 0);
+    const int top = (ScaledHeaderHeight() - size) / 2;
+    return RECT{ left, top, left + size, top + size };
 }
 
 static RECT HeaderTitleRect() {
@@ -450,15 +479,19 @@ static RECT HeaderTitleRect() {
     GetClientRect(g.hwnd, &client);
     RECT nextRect = HeaderPageButtonRect(true);
     RECT settingsRect = HeaderButtonRect(2);
-    const LONG left = nextRect.right + HEADER_BUTTON_GAP;
-    const LONG right = std::max<LONG>(left, settingsRect.left - HEADER_BUTTON_GAP);
-    return RECT{ left, 0, right, HEADER_HEIGHT };
+    const int gap = ScaleValue(HEADER_BUTTON_GAP);
+    const LONG left = nextRect.right + gap;
+    const LONG right = std::max<LONG>(left, settingsRect.left - gap);
+    return RECT{ left, 0, right, ScaledHeaderHeight() };
 }
 
 static int HeaderMinimumWidth() {
-    const int pageGroupRight = HEADER_BUTTON_GAP + HEADER_PAGE_BUTTON_SIZE + HEADER_BUTTON_GAP + HEADER_PAGE_BUTTON_SIZE;
-    const int windowGroupWidth = 3 * HEADER_WINDOW_BUTTON_SIZE + 2 * HEADER_BUTTON_GAP;
-    return pageGroupRight + HEADER_BUTTON_GAP + windowGroupWidth + HEADER_BUTTON_GAP;
+    const int gap = ScaleValue(HEADER_BUTTON_GAP);
+    const int pageSize = ScaleValue(HEADER_PAGE_BUTTON_SIZE);
+    const int windowSize = ScaleValue(HEADER_WINDOW_BUTTON_SIZE);
+    const int pageGroupRight = gap + pageSize + gap + pageSize;
+    const int windowGroupWidth = 3 * windowSize + 2 * gap;
+    return pageGroupRight + gap + windowGroupWidth + gap;
 }
 
 static std::vector<int> ExistingPages() {
@@ -607,9 +640,11 @@ static void UpdateTooltipRects() {
 
 static void ResizeWindowToGrid() {
     if (!g.hwnd) return;
-    const int gridWidth = g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap);
+    const int gap = ScaledGap();
+    const int buttonSize = ScaledButtonSize();
+    const int gridWidth = gap + g.config.cols * (buttonSize + gap);
     const int width = std::max(gridWidth, HeaderMinimumWidth());
-    const int height = HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap);
+    const int height = ScaledHeaderHeight() + gap + g.config.rows * (buttonSize + gap);
     SetWindowPos(g.hwnd, g.config.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
         width, height, SWP_NOMOVE | SWP_NOACTIVATE);
     BOOL value = DWMWCP_ROUND;
@@ -629,7 +664,7 @@ static void RememberWindowPosition() {
 
 static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int points, bool bold) {
     LOGFONTW lf{};
-    lf.lfHeight = -MulDiv(points, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    lf.lfHeight = -MulDiv(ScaleValue(points), GetDeviceCaps(hdc, LOGPIXELSY), 72);
     lf.lfWeight = bold ? FW_SEMIBOLD : FW_NORMAL;
     wcscpy_s(lf.lfFaceName, L"Segoe UI");
     HFONT font = CreateFontIndirectW(&lf);
@@ -643,7 +678,7 @@ static void DrawCenteredText(HDC hdc, RECT rc, const std::wstring& text, int poi
 
 static bool IsTextTruncated(HDC hdc, const std::wstring& text, RECT rc, int points, bool bold) {
     LOGFONTW lf{};
-    lf.lfHeight = -MulDiv(points, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    lf.lfHeight = -MulDiv(ScaleValue(points), GetDeviceCaps(hdc, LOGPIXELSY), 72);
     lf.lfWeight = bold ? FW_SEMIBOLD : FW_NORMAL;
     wcscpy_s(lf.lfFaceName, L"Segoe UI");
     HFONT font = CreateFontIndirectW(&lf);
@@ -732,8 +767,8 @@ static void RefreshCurrentIcons() {
         const ButtonConfig& b = buttons[i];
         
         RECT r = ButtonRect(static_cast<int>(i));
-        int side = std::min(r.right - r.left, r.bottom - r.top) - 28;
-        if (side < 24) side = 24;
+        int side = std::min(r.right - r.left, r.bottom - r.top) - ScaleValue(28);
+        if (side < ScaleValue(24)) side = ScaleValue(24);
 
         if (b.action.type == ActionType::Settings || b.action.type == ActionType::Keys) continue;
 
@@ -794,15 +829,15 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
 
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
-    const int side = std::min(width, height) - 36;
-    if (side < 30) return false;
+    const int side = std::min(width, height) - ScaleValue(36);
+    if (side < ScaleValue(30)) return false;
 
     const int left = rc.left + (width - side) / 2;
-    const int top = rc.top + 12;
+    const int top = rc.top + ScaleValue(12);
     const int midY = top + side / 2;
     const int color = RGB(238, 242, 247);
 
-    HPEN pen = CreatePen(PS_SOLID, 3, color);
+    HPEN pen = CreatePen(PS_SOLID, ScaleValue(3), color);
     HBRUSH brush = CreateSolidBrush(color);
     HGDIOBJ oldPen = SelectObject(hdc, pen);
     HGDIOBJ oldBrush = SelectObject(hdc, brush);
@@ -830,7 +865,7 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
             LineTo(hdc, left + side * 2 / 3, midY + side / 6);
         } else {
             const int markY = midY;
-            const int markHalf = std::max(5, side / 10);
+            const int markHalf = std::max(ScaleValue(5), side / 10);
             const int firstX = left + side * 13 / 20;
             const int secondX = left + side * 9 / 10;
             const int count = volumeUpFast || volumeDownFast ? 2 : 1;
@@ -845,7 +880,7 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
             }
         }
     } else if (screenshot) {
-        RoundRect(hdc, left + side / 8, top + side / 4, left + side * 7 / 8, top + side * 3 / 4, 6, 6);
+        RoundRect(hdc, left + side / 8, top + side / 4, left + side * 7 / 8, top + side * 3 / 4, ScaleValue(6), ScaleValue(6));
         Rectangle(hdc, left + side / 3, top + side / 6, left + side * 2 / 3, top + side / 4);
         Ellipse(hdc, left + side * 3 / 8, top + side * 3 / 8, left + side * 5 / 8, top + side * 5 / 8);
     } else if (playPause) {
@@ -988,13 +1023,14 @@ static bool DrawKeySpecIcon(HDC hdc, const Action& action, RECT rc) {
 
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
-    const int keyWidth = std::max(46, std::min(width - 26, 96));
-    const int keyHeight = std::max(32, std::min(height - 44, 58));
+    const int keyWidth = std::max(ScaleValue(46), std::min(width - ScaleValue(26), ScaleValue(96)));
+    const int keyHeight = std::max(ScaleValue(32), std::min(height - ScaleValue(44), ScaleValue(58)));
+    const int topOffset = ScaleValue(16);
     RECT keyRect{
         rc.left + (width - keyWidth) / 2,
-        rc.top + 16,
+        rc.top + topOffset,
         rc.left + (width + keyWidth) / 2,
-        rc.top + 16 + keyHeight
+        rc.top + topOffset + keyHeight
     };
 
     HBRUSH fill = CreateSolidBrush(RGB(238, 242, 247));
@@ -1008,7 +1044,7 @@ static bool DrawKeySpecIcon(HDC hdc, const Action& action, RECT rc) {
     DeleteObject(edge);
 
     LOGFONTW lf{};
-    lf.lfHeight = -MulDiv(10, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+    lf.lfHeight = -MulDiv(ScaleValue(10), GetDeviceCaps(hdc, LOGPIXELSY), 72);
     lf.lfWeight = FW_SEMIBOLD;
     wcscpy_s(lf.lfFaceName, L"Segoe UI");
     HFONT font = CreateFontIndirectW(&lf);
@@ -1021,7 +1057,7 @@ static bool DrawKeySpecIcon(HDC hdc, const Action& action, RECT rc) {
         RECT topText = keyRect;
         topText.bottom = keyRect.top + keyHeight / 2;
         RECT bottomText = keyRect;
-        bottomText.top = keyRect.top + keyHeight / 2 - 2;
+        bottomText.top = keyRect.top + keyHeight / 2 - ScaleValue(2);
         DrawTextW(hdc, secondary.c_str(), -1, &topText, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS);
         DrawTextW(hdc, primary.c_str(), -1, &bottomText, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
     } else {
@@ -1053,7 +1089,7 @@ static Gdiplus::RectF RectFFromRect(RECT rc) {
 }
 
 static void DrawHeaderControl(HDC hdc, RECT rc, COLORREF fill) {
-    RECT circle = RectInset(rc, 3);
+    RECT circle = RectInset(rc, ScaleValue(3));
     Gdiplus::Graphics graphics(hdc);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
@@ -1119,7 +1155,7 @@ static void DrawHeaderMinusIcon(HDC hdc, RECT rc) {
     const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
     const Gdiplus::REAL cy = (rc.top + rc.bottom) / 2.0f;
     const Gdiplus::REAL length = (rc.right - rc.left) * 0.34f;
-    Gdiplus::Pen pen(Gdiplus::Color(108, 71, 16), 2.0f);
+    Gdiplus::Pen pen(Gdiplus::Color(108, 71, 16), static_cast<Gdiplus::REAL>(ScaleValue(2)));
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     graphics.DrawLine(&pen, cx - length / 2.0f, cy, cx + length / 2.0f, cy);
@@ -1133,7 +1169,7 @@ static void DrawHeaderCloseIcon(HDC hdc, RECT rc) {
     const Gdiplus::REAL cx = (rc.left + rc.right) / 2.0f;
     const Gdiplus::REAL cy = (rc.top + rc.bottom) / 2.0f;
     const Gdiplus::REAL half = (rc.right - rc.left) * 0.17f;
-    Gdiplus::Pen pen(Gdiplus::Color(118, 28, 24), 2.0f);
+    Gdiplus::Pen pen(Gdiplus::Color(118, 28, 24), static_cast<Gdiplus::REAL>(ScaleValue(2)));
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     graphics.DrawLine(&pen, cx - half, cy - half, cx + half, cy + half);
@@ -1169,7 +1205,7 @@ static void Paint(HDC hdc) {
     DrawHeaderControl(hdc, closeRect, closeFill);
     DrawCenteredText(hdc, prevRect, L"<", 12, true);
     DrawCenteredText(hdc, nextRect, L">", 12, true);
-    DrawSettingsIcon(hdc, RectInset(settingsRect, 2), settingsFill);
+    DrawSettingsIcon(hdc, RectInset(settingsRect, ScaleValue(2)), settingsFill);
     DrawHeaderMinusIcon(hdc, minimizeRect);
     DrawHeaderCloseIcon(hdc, closeRect);
 
@@ -1181,7 +1217,7 @@ static void Paint(HDC hdc) {
         HPEN pen = CreatePen(PS_SOLID, 1, RGB(92, 101, 118));
         HGDIOBJ oldBrush = SelectObject(hdc, brush);
         HGDIOBJ oldPen = SelectObject(hdc, pen);
-        RoundRect(hdc, r.left, r.top, r.right, r.bottom, 10, 10);
+        RoundRect(hdc, r.left, r.top, r.right, r.bottom, ScaleValue(10), ScaleValue(10));
         SelectObject(hdc, oldBrush);
         SelectObject(hdc, oldPen);
         DeleteObject(brush);
@@ -1189,7 +1225,7 @@ static void Paint(HDC hdc) {
 
         const ButtonConfig& b = buttons[i];
         RECT iconRect = r;
-        iconRect.bottom -= 20;
+        iconRect.bottom -= ScaleValue(20);
         bool drew = false;
 
         if (g.currentIcons.size() > static_cast<size_t>(i)) {
@@ -1202,20 +1238,20 @@ static void Paint(HDC hdc) {
                 blend.SourceConstantAlpha = 255;
                 blend.AlphaFormat = AC_SRC_ALPHA;
                 
-                int side = std::min(r.right - r.left, r.bottom - r.top) - 28;
-                if (side < 24) side = 24;
+                int side = std::min(r.right - r.left, r.bottom - r.top) - ScaleValue(28);
+                if (side < ScaleValue(24)) side = ScaleValue(24);
                 int x = r.left + ((r.right - r.left) - side) / 2;
-                int y = r.top + 10;
+                int y = r.top + ScaleValue(10);
                 
                 AlphaBlend(hdc, x, y, side, side, memDc, 0, 0, side, side, blend);
                 SelectObject(memDc, oldBitmap);
                 DeleteDC(memDc);
                 drew = true;
             } else if (cached.icon) {
-                int side = std::min(r.right - r.left, r.bottom - r.top) - 32;
-                if (side < 24) side = 24;
+                int side = std::min(r.right - r.left, r.bottom - r.top) - ScaleValue(32);
+                if (side < ScaleValue(24)) side = ScaleValue(24);
                 int x = r.left + ((r.right - r.left) - side) / 2;
-                int y = r.top + 12;
+                int y = r.top + ScaleValue(12);
                 DrawIconEx(hdc, x, y, cached.icon, side, side, 0, nullptr, DI_NORMAL);
                 drew = true;
             }
@@ -1227,16 +1263,16 @@ static void Paint(HDC hdc) {
         }
         if (!drew && b.action.type == ActionType::Settings) {
             RECT settingsIconRect = r;
-            settingsIconRect.bottom -= 20;
+            settingsIconRect.bottom -= ScaleValue(20);
             DrawSettingsIcon(hdc, settingsIconRect);
             drew = true;
         }
         if (!drew && !b.text.empty()) DrawCenteredText(hdc, iconRect, b.text, 24, false);
 
         RECT titleRect = r;
-        titleRect.top = r.bottom - 24;
-        titleRect.left += 6;
-        titleRect.right -= 6;
+        titleRect.top = r.bottom - ScaleValue(24);
+        titleRect.left += ScaleValue(6);
+        titleRect.right -= ScaleValue(6);
         DrawCenteredText(hdc, titleRect, b.title.empty() ? L"Empty" : b.title, 9, false);
     }
 }
@@ -2756,14 +2792,16 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         AddEdit(hwnd, IDC_BUTTON_SIZE, std::to_wstring(ctx->original.buttonSize), 230, 170, 160, 34);
         AddLabel(hwnd, L"Gap", 56, 222, 150, 28);
         AddEdit(hwnd, IDC_GAP, std::to_wstring(ctx->original.gap), 230, 218, 160, 34);
-        AddCheckWithReadableLabel(hwnd, IDC_TOPMOST, L"Always on top", 230, 278, 220);
+        AddLabel(hwnd, L"Display scale (%)", 56, 270, 150, 28);
+        AddEdit(hwnd, IDC_SCALE_PERCENT, std::to_wstring(ClampScalePercent(ctx->original.scalePercent)), 230, 266, 160, 34);
+        AddCheckWithReadableLabel(hwnd, IDC_TOPMOST, L"Always on top", 230, 326, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_SETCHECK, ctx->original.alwaysOnTop ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddCheckWithReadableLabel(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 322, 220);
+        AddCheckWithReadableLabel(hwnd, IDC_TRAY_ICON, L"Show tray icon", 230, 370, 220);
         SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_SETCHECK, ctx->original.showTrayIcon ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddCheckWithReadableLabel(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 366, 260);
+        AddCheckWithReadableLabel(hwnd, IDC_RUN_ON_STARTUP, L"Run on Windows startup", 230, 414, 260);
         SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_SETCHECK, IsRunOnStartupEnabled() ? BST_CHECKED : BST_UNCHECKED, 0);
-        AddButton(hwnd, IDOK, L"OK", 344, 424, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 424, 104, 38);
+        AddButton(hwnd, IDOK, L"OK", 344, 472, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"Cancel", 456, 472, 104, 38);
         return 0;
     }
     case WM_COMMAND:
@@ -2772,6 +2810,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
             g.config.cols = std::max(1, std::min(12, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_COLS)).c_str())));
             g.config.buttonSize = std::max(64, std::min(220, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_BUTTON_SIZE)).c_str())));
             g.config.gap = std::max(4, std::min(32, _wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_GAP)).c_str())));
+            g.config.scalePercent = ClampScalePercent(_wtoi(GetWindowTextString(GetDlgItem(hwnd, IDC_SCALE_PERCENT)).c_str()));
             g.config.alwaysOnTop = SendMessageW(GetDlgItem(hwnd, IDC_TOPMOST), BM_GETCHECK, 0, 0) == BST_CHECKED;
             g.config.showTrayIcon = SendMessageW(GetDlgItem(hwnd, IDC_TRAY_ICON), BM_GETCHECK, 0, 0) == BST_CHECKED;
             SetRunOnStartup(SendMessageW(GetDlgItem(hwnd, IDC_RUN_ON_STARTUP), BM_GETCHECK, 0, 0) == BST_CHECKED);
@@ -2812,7 +2851,7 @@ static void ShowSettingsDialog() {
         registered = true;
     }
     HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherSettingsEditor", L"Settings",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 526,
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 574,
         g.hwnd, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     if (ctx.accepted) {
@@ -3149,7 +3188,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             ExecuteAction(buttons[index].action);
-        } else if (pt.y < HEADER_HEIGHT) {
+        } else if (pt.y < ScaledHeaderHeight()) {
             ReleaseCapture();
             SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         } else {
@@ -3184,9 +3223,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 std::wstring title = buttons[index].title.empty() ? L"Empty" : buttons[index].title;
                 RECT r = ButtonRect(index);
                 RECT titleRect = r;
-                titleRect.top = r.bottom - 24;
-                titleRect.left += 6;
-                titleRect.right -= 6;
+                titleRect.top = r.bottom - ScaleValue(24);
+                titleRect.left += ScaleValue(6);
+                titleRect.right -= ScaleValue(6);
                 HDC hdc = GetDC(hwnd);
                 bool truncated = IsTextTruncated(hdc, title, titleRect, 9, false);
                 ReleaseDC(hwnd, hdc);
