@@ -2934,6 +2934,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOVE:
         RememberWindowPosition();
         return DefWindowProcW(hwnd, msg, wp, lp);
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC hdc = BeginPaint(hwnd, &ps);
@@ -3099,7 +3101,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int show) {
     RegisterClassW(&wc);
 
     g.hwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_LAYERED | (g.config.alwaysOnTop ? WS_EX_TOPMOST : 0),
+        WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE | (g.config.alwaysOnTop ? WS_EX_TOPMOST : 0),
         wc.lpszClassName,
         L"Launcher Widget",
         WS_POPUP,
