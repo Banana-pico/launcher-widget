@@ -131,8 +131,9 @@ static constexpr UINT WM_TRAYICON = WM_APP + 1;
 static constexpr UINT WM_ALT_TAB_HOOK_CLICK = WM_APP + 2;
 
 static constexpr int HEADER_HEIGHT = 40;
-static constexpr int HEADER_BUTTON_SIZE = 30;
-static constexpr int HEADER_BUTTON_GAP = 8;
+static constexpr int HEADER_PAGE_BUTTON_SIZE = 30;
+static constexpr int HEADER_WINDOW_BUTTON_SIZE = 24;
+static constexpr int HEADER_BUTTON_GAP = 6;
 static constexpr BYTE WINDOW_OPACITY = 232;
 static constexpr COLORREF DIALOG_BG = RGB(30, 34, 40);
 static constexpr COLORREF DIALOG_TEXT = RGB(238, 242, 247);
@@ -430,26 +431,31 @@ static RECT ButtonRect(int index) {
 static RECT HeaderButtonRect(int slotFromRight) {
     RECT client{};
     GetClientRect(g.hwnd, &client);
-    const int right = client.right - HEADER_BUTTON_GAP - slotFromRight * (HEADER_BUTTON_SIZE + HEADER_BUTTON_GAP);
-    return RECT{ right - HEADER_BUTTON_SIZE, 4, right, 4 + HEADER_BUTTON_SIZE };
+    const int right = client.right - HEADER_BUTTON_GAP - slotFromRight * (HEADER_WINDOW_BUTTON_SIZE + HEADER_BUTTON_GAP);
+    const int top = (HEADER_HEIGHT - HEADER_WINDOW_BUTTON_SIZE) / 2;
+    return RECT{ right - HEADER_WINDOW_BUTTON_SIZE, top, right, top + HEADER_WINDOW_BUTTON_SIZE };
 }
 
 static RECT HeaderPageButtonRect(bool next) {
-    RECT client{};
-    GetClientRect(g.hwnd, &client);
-    const LONG center = (client.right - client.left) / 2;
-    const LONG titleHalfWidth = std::min<LONG>(120, std::max<LONG>(54, (client.right - 240) / 2));
-    const int x = next ? center + titleHalfWidth + HEADER_BUTTON_GAP :
-        center - titleHalfWidth - HEADER_BUTTON_GAP - HEADER_BUTTON_SIZE;
-    return RECT{ x, 4, x + HEADER_BUTTON_SIZE, 4 + HEADER_BUTTON_SIZE };
+    const int left = HEADER_BUTTON_GAP + (next ? HEADER_PAGE_BUTTON_SIZE + HEADER_BUTTON_GAP : 0);
+    const int top = (HEADER_HEIGHT - HEADER_PAGE_BUTTON_SIZE) / 2;
+    return RECT{ left, top, left + HEADER_PAGE_BUTTON_SIZE, top + HEADER_PAGE_BUTTON_SIZE };
 }
 
 static RECT HeaderTitleRect() {
     RECT client{};
     GetClientRect(g.hwnd, &client);
-    RECT prevRect = HeaderPageButtonRect(false);
     RECT nextRect = HeaderPageButtonRect(true);
-    return RECT{ prevRect.right + HEADER_BUTTON_GAP, 0, nextRect.left - HEADER_BUTTON_GAP, HEADER_HEIGHT };
+    RECT settingsRect = HeaderButtonRect(2);
+    const LONG left = nextRect.right + HEADER_BUTTON_GAP;
+    const LONG right = std::max<LONG>(left, settingsRect.left - HEADER_BUTTON_GAP);
+    return RECT{ left, 0, right, HEADER_HEIGHT };
+}
+
+static int HeaderMinimumWidth() {
+    const int pageGroupRight = HEADER_BUTTON_GAP + HEADER_PAGE_BUTTON_SIZE + HEADER_BUTTON_GAP + HEADER_PAGE_BUTTON_SIZE;
+    const int windowGroupWidth = 3 * HEADER_WINDOW_BUTTON_SIZE + 2 * HEADER_BUTTON_GAP;
+    return pageGroupRight + HEADER_BUTTON_GAP + windowGroupWidth + HEADER_BUTTON_GAP;
 }
 
 static std::vector<int> ExistingPages() {
@@ -598,7 +604,8 @@ static void UpdateTooltipRects() {
 
 static void ResizeWindowToGrid() {
     if (!g.hwnd) return;
-    const int width = g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap);
+    const int gridWidth = g.config.gap + g.config.cols * (g.config.buttonSize + g.config.gap);
+    const int width = std::max(gridWidth, HeaderMinimumWidth());
     const int height = HEADER_HEIGHT + g.config.gap + g.config.rows * (g.config.buttonSize + g.config.gap);
     SetWindowPos(g.hwnd, g.config.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
         width, height, SWP_NOMOVE | SWP_NOACTIVATE);
