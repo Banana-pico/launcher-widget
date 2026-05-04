@@ -1698,16 +1698,7 @@ static std::wstring ComboText(HWND combo) {
 }
 
 static bool IsSystemKeyKind(const std::wstring& kind) {
-    return kind == L"Volume Up" || kind == L"音量アップ" ||
-        kind == L"Volume Down" || kind == L"音量ダウン" ||
-        kind == L"Volume Up++" || kind == L"音量アップ++" ||
-        kind == L"Volume Down--" || kind == L"音量ダウン--" ||
-        kind == L"Mute" || kind == L"ミュート" ||
-        kind == L"Screenshot" || kind == L"スクリーンショット" ||
-        kind == L"Play/Pause" || kind == L"再生/一時停止" ||
-        kind == L"Next Track" || kind == L"次のトラック" ||
-        kind == L"Previous Track" || kind == L"前のトラック" ||
-        kind == L"Stop Media" || kind == L"停止";
+    return kind == L"Screenshot" || kind == L"スクリーンショット";
 }
 
 static bool IsSequenceKeySpec(const std::wstring& spec) {
@@ -1715,16 +1706,7 @@ static bool IsSequenceKeySpec(const std::wstring& spec) {
 }
 
 static std::wstring SystemKeyTarget(const std::wstring& kind) {
-    if (kind == L"Volume Up" || kind == L"音量アップ") return L"VOLUME_UP";
-    if (kind == L"Volume Down" || kind == L"音量ダウン") return L"VOLUME_DOWN";
-    if (kind == L"Volume Up++" || kind == L"音量アップ++") return L"VOLUME_UP_FAST";
-    if (kind == L"Volume Down--" || kind == L"音量ダウン--") return L"VOLUME_DOWN_FAST";
-    if (kind == L"Mute" || kind == L"ミュート") return L"VOLUME_MUTE";
     if (kind == L"Screenshot" || kind == L"スクリーンショット") return L"PRINTSCREEN";
-    if (kind == L"Play/Pause" || kind == L"再生/一時停止") return L"MEDIA_PLAY_PAUSE";
-    if (kind == L"Next Track" || kind == L"次のトラック") return L"MEDIA_NEXT_TRACK";
-    if (kind == L"Previous Track" || kind == L"前のトラック") return L"MEDIA_PREV_TRACK";
-    if (kind == L"Stop Media" || kind == L"停止") return L"MEDIA_STOP";
     return L"";
 }
 
@@ -1734,16 +1716,16 @@ static std::wstring ActionKindForButton(const ButtonConfig& button) {
     if (action.type == ActionType::Settings) return L"Windows Settings";
     if (action.type == ActionType::Command) return L"Command";
     if (action.type == ActionType::Keys) {
-        if (action.target == L"VOLUME_UP") return L"音量アップ";
-        if (action.target == L"VOLUME_DOWN") return L"音量ダウン";
-        if (action.target == L"VOLUME_UP_FAST") return L"音量アップ++";
-        if (action.target == L"VOLUME_DOWN_FAST") return L"音量ダウン--";
-        if (action.target == L"VOLUME_MUTE") return L"ミュート";
+        if (action.target == L"VOLUME_UP") return L"メディアコントロール";
+        if (action.target == L"VOLUME_DOWN") return L"メディアコントロール";
+        if (action.target == L"VOLUME_UP_FAST") return L"メディアコントロール";
+        if (action.target == L"VOLUME_DOWN_FAST") return L"メディアコントロール";
+        if (action.target == L"VOLUME_MUTE") return L"メディアコントロール";
         if (action.target == L"PRINTSCREEN") return L"スクリーンショット";
-        if (action.target == L"MEDIA_PLAY_PAUSE") return L"再生/一時停止";
-        if (action.target == L"MEDIA_NEXT_TRACK") return L"次のトラック";
-        if (action.target == L"MEDIA_PREV_TRACK") return L"前のトラック";
-        if (action.target == L"MEDIA_STOP") return L"停止";
+        if (action.target == L"MEDIA_PLAY_PAUSE") return L"メディアコントロール";
+        if (action.target == L"MEDIA_NEXT_TRACK") return L"メディアコントロール";
+        if (action.target == L"MEDIA_PREV_TRACK") return L"メディアコントロール";
+        if (action.target == L"MEDIA_STOP") return L"メディアコントロール";
         return L"Keys";
     }
     if (action.target.rfind(L"http://", 0) == 0 || action.target.rfind(L"https://", 0) == 0) return L"URL";
@@ -1768,19 +1750,20 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     bool needsTarget = kind != L"None" && !IsSystemKeyKind(kind);
     bool needsArgs = kind == L"App (.exe)" || kind == L"File" || kind == L"Command";
     bool canBrowse = kind == L"App (.exe)" || kind == L"File" || kind == L"Folder" || kind == L"Keys";
-    bool canImport = kind == L"URL" || kind == L"App (.exe)" || kind == L"Windows Settings";
+    bool canImport = kind == L"URL" || kind == L"App (.exe)" || kind == L"Windows Settings" || kind == L"メディアコントロール";
 
     SetWindowTextW(targetLabel, kind == L"URL" ? L"URL" :
         kind == L"Keys" ? L"Key chord" :
         kind == L"Windows Settings" ? L"Settings" :
         kind == L"Command" ? L"Command" :
         kind == L"Folder" ? L"Folder" :
+        kind == L"メディアコントロール" ? L"Command" :
         kind == L"File" ? L"File" : L"Target");
     SetWindowTextW(argsLabel, kind == L"Command" ? L"Arguments" : L"Options");
     SetWindowTextW(browse, kind == L"Folder" ? L"フォルダー" :
         kind == L"Keys" ? L"選択" : L"選択");
     SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" :
-        kind == L"Windows Settings" ? L"Choose" : L"Favorites");
+        (kind == L"Windows Settings" || kind == L"メディアコントロール") ? L"Choose" : L"Favorites");
 
     if (kind == L"App (.exe)") {
         MoveWindow(target, 220, 118, 500, 34, TRUE);
@@ -1789,7 +1772,7 @@ static void UpdateButtonEditorFields(HWND hwnd) {
     } else if (kind == L"URL") {
         MoveWindow(target, 220, 118, 588, 34, TRUE);
         MoveWindow(import, 842, 118, 116, 34, TRUE);
-    } else if (kind == L"Windows Settings") {
+    } else if (kind == L"Windows Settings" || kind == L"メディアコントロール") {
         MoveWindow(target, 220, 118, 588, 34, TRUE);
         MoveWindow(import, 842, 118, 116, 34, TRUE);
     } else if (kind == L"File" || kind == L"Folder") {
@@ -1829,15 +1812,34 @@ static void ComputeDisplayDefaults(HWND hwnd, const std::wstring& kind, std::wst
 
     if (IsSystemKeyKind(kind)) {
         title = kind;
-        text = (kind == L"Volume Up" || kind == L"音量アップ") ? L"VOL+" :
-            (kind == L"Volume Down" || kind == L"音量ダウン") ? L"VOL-" :
-            (kind == L"Volume Up++" || kind == L"音量アップ++") ? L"VOL++" :
-            (kind == L"Volume Down--" || kind == L"音量ダウン--") ? L"VOL--" :
-            (kind == L"Mute" || kind == L"ミュート") ? L"MUTE" :
-            (kind == L"Screenshot" || kind == L"スクリーンショット") ? L"SS" :
-            (kind == L"Play/Pause" || kind == L"再生/一時停止") ? L"PLAY" :
-            (kind == L"Next Track" || kind == L"次のトラック") ? L"NEXT" :
-            (kind == L"Previous Track" || kind == L"前のトラック") ? L"PREV" : L"STOP";
+        text = (kind == L"Screenshot" || kind == L"スクリーンショット") ? L"SS" : L"";
+    } else if (kind == L"メディアコントロール") {
+        if (target.empty()) return;
+        struct TmpMediaPreset {
+            const wchar_t* title;
+            const wchar_t* target;
+            const wchar_t* badge;
+        };
+        static const TmpMediaPreset tmpPresets[] = {
+            { L"音量アップ", L"VOLUME_UP", L"VOL+" },
+            { L"音量ダウン", L"VOLUME_DOWN", L"VOL-" },
+            { L"音量アップ++", L"VOLUME_UP_FAST", L"VOL++" },
+            { L"音量ダウン--", L"VOLUME_DOWN_FAST", L"VOL--" },
+            { L"ミュート", L"VOLUME_MUTE", L"MUTE" },
+            { L"再生/一時停止", L"MEDIA_PLAY_PAUSE", L"PLAY" },
+            { L"次のトラック", L"MEDIA_NEXT_TRACK", L"NEXT" },
+            { L"前のトラック", L"MEDIA_PREV_TRACK", L"PREV" },
+            { L"停止", L"MEDIA_STOP", L"STOP" }
+        };
+        for (const auto& preset : tmpPresets) {
+            if (target == preset.target) {
+                title = preset.title;
+                text = preset.badge;
+                return;
+            }
+        }
+        title = L"メディアコントロール";
+        text = L"MEDIA";
     } else if (kind == L"URL") {
         if (target.empty()) return;
         std::wstring host = HostFromUrl(target);
@@ -2057,6 +2059,43 @@ static void ChooseWindowsSetting(HWND hwnd) {
     }
 }
 
+struct MediaPreset {
+    const wchar_t* title;
+    const wchar_t* target;
+    const wchar_t* badge;
+};
+
+static const MediaPreset kMediaPresets[] = {
+    { L"音量アップ", L"VOLUME_UP", L"VOL+" },
+    { L"音量ダウン", L"VOLUME_DOWN", L"VOL-" },
+    { L"音量アップ++", L"VOLUME_UP_FAST", L"VOL++" },
+    { L"音量ダウン--", L"VOLUME_DOWN_FAST", L"VOL--" },
+    { L"ミュート", L"VOLUME_MUTE", L"MUTE" },
+    { L"再生/一時停止", L"MEDIA_PLAY_PAUSE", L"PLAY" },
+    { L"次のトラック", L"MEDIA_NEXT_TRACK", L"NEXT" },
+    { L"前のトラック", L"MEDIA_PREV_TRACK", L"PREV" },
+    { L"停止", L"MEDIA_STOP", L"STOP" }
+};
+
+static void ChooseMediaControl(HWND hwnd) {
+    HMENU menu = CreatePopupMenu();
+    const int count = static_cast<int>(sizeof(kMediaPresets) / sizeof(kMediaPresets[0]));
+    for (int i = 0; i < count; ++i) {
+        AppendMenuW(menu, MF_STRING, 8000 + i, kMediaPresets[i].title);
+    }
+    RECT rc{};
+    GetWindowRect(GetDlgItem(hwnd, IDC_URL_IMPORT), &rc);
+    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, rc.left, rc.bottom, 0, hwnd, nullptr);
+    DestroyMenu(menu);
+    if (cmd >= 8000 && cmd < 8000 + count) {
+        const MediaPreset& preset = kMediaPresets[cmd - 8000];
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TARGET), preset.target);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TITLE), preset.title);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_TEXT), preset.badge);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_IMAGE), L"");
+    }
+}
+
 static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
     ApplyDisplayDefaults(hwnd, kind, false);
 }
@@ -2244,7 +2283,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Action", 32, 28, 180, 28);
         AddLabel(hwnd, L"Type", 56, 74, 140, 28);
         HWND combo = AddCombo(hwnd, IDC_ACTION, 220, 70, 700, 340);
-        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"音量アップ", L"音量ダウン", L"音量アップ++", L"音量ダウン--", L"ミュート", L"再生/一時停止", L"次のトラック", L"前のトラック", L"停止", L"スクリーンショット", L"Command", L"Keys", L"None" }) {
+        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"メディアコントロール", L"スクリーンショット", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
@@ -2301,6 +2340,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             std::wstring kind = ComboText(GetDlgItem(hwnd, IDC_ACTION));
             if (kind == L"App (.exe)") ImportStartMenuApp(hwnd);
             else if (kind == L"Windows Settings") ChooseWindowsSetting(hwnd);
+            else if (kind == L"メディアコントロール") ChooseMediaControl(hwnd);
             else ImportFavoriteUrl(hwnd);
             return 0;
         }
@@ -2321,7 +2361,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             if (kind == L"None") ctx->target->action.type = ActionType::None;
             else if (kind == L"Windows Settings") ctx->target->action.type = ActionType::Settings;
             else if (kind == L"Command") ctx->target->action.type = ActionType::Command;
-            else if (kind == L"Keys" || IsSystemKeyKind(kind)) ctx->target->action.type = ActionType::Keys;
+            else if (kind == L"Keys" || IsSystemKeyKind(kind) || kind == L"メディアコントロール") ctx->target->action.type = ActionType::Keys;
             else ctx->target->action.type = ActionType::Open;
             ctx->target->action.target = IsSystemKeyKind(kind) ? SystemKeyTarget(kind) : GetWindowTextString(GetDlgItem(hwnd, IDC_TARGET));
             ctx->target->action.args = GetWindowTextString(GetDlgItem(hwnd, IDC_ARGS));

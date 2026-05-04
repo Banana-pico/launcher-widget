@@ -51,9 +51,8 @@ Visual Studio 2022 で `Launcher.sln` を開き、`x64` / `Release` でビルド
 - `File`: `Select` から任意のファイルを選択できます。
 - `Folder`: `Select` からフォルダーを選択できます。
 - `Windows Settings`: `Choose` から表示、サウンド、ネットワーク、Windows Update などの設定先を選択できます。`ms-settings:` などの Windows 設定 URI を直接入力することもできます。
-- `音量アップ` / `音量ダウン` / `音量アップ++` / `音量ダウン--` / `ミュート`: 音量操作を実行します。`++` / `--` は 1 回の呼び出しで大きめに変化します。
-- `Play/Pause` / `Next Track` / `Previous Track` / `Stop Media`: メディア再生を制御します。
-- `Screenshot`: Print Screen キーを送信します。
+- `メディアコントロール`: `Choose` から音量操作（アップ、ダウン、ミュートなど）やメディア再生（再生/一時停止、次のトラックなど）を選択できます。
+- `スクリーンショット`: Print Screen キーを送信します。
 - `Command`: コマンドと引数を分けて入力します。
 - `Keys`: `選択` からキーボード配列風の画面を開き、代表キー、Caps Lock、Num Lock、Scroll Lock、修飾キーを選べます。`CTRL+ALT+T` のような同時押下に加え、`SEQ:CTRL+C,CTRL+V` のような順次押下も入力できます。
 - Keys のタイトルや表示テキストが空の場合は、選択したキー内容から自動補完されます。ボタン画像を指定しない場合は、割り当て内容を示すキーキャップ風アイコンが表示されます。
