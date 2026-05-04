@@ -683,13 +683,15 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
     if (action.type != ActionType::Keys) return false;
     const bool volumeUp = action.target == L"VOLUME_UP";
     const bool volumeDown = action.target == L"VOLUME_DOWN";
+    const bool volumeUpFast = action.target == L"VOLUME_UP_FAST";
+    const bool volumeDownFast = action.target == L"VOLUME_DOWN_FAST";
     const bool volumeMute = action.target == L"VOLUME_MUTE";
     const bool screenshot = action.target == L"PRINTSCREEN";
     const bool playPause = action.target == L"MEDIA_PLAY_PAUSE";
     const bool nextTrack = action.target == L"MEDIA_NEXT_TRACK";
     const bool previousTrack = action.target == L"MEDIA_PREV_TRACK";
     const bool stopMedia = action.target == L"MEDIA_STOP";
-    if (!volumeUp && !volumeDown && !volumeMute && !screenshot && !playPause && !nextTrack && !previousTrack && !stopMedia) return false;
+    if (!volumeUp && !volumeDown && !volumeUpFast && !volumeDownFast && !volumeMute && !screenshot && !playPause && !nextTrack && !previousTrack && !stopMedia) return false;
 
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
@@ -708,7 +710,7 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
 
     SelectObject(hdc, GetStockObject(NULL_BRUSH));
 
-    if (volumeUp || volumeDown || volumeMute) {
+    if (volumeUp || volumeDown || volumeUpFast || volumeDownFast || volumeMute) {
         SelectObject(hdc, brush);
         RECT box{ left + side / 8, midY - side / 7, left + side / 3, midY + side / 7 };
         Rectangle(hdc, box.left, box.top, box.right, box.bottom);
@@ -734,9 +736,13 @@ static bool DrawSystemKeyIcon(HDC hdc, const Action& action, RECT rc) {
             const int markHalf = std::max(4, side / 8);
             MoveToEx(hdc, markX - markHalf, midY, nullptr);
             LineTo(hdc, markX + markHalf, midY);
-            if (volumeUp) {
+            if (volumeUp || volumeUpFast) {
                 MoveToEx(hdc, markX, midY - markHalf, nullptr);
                 LineTo(hdc, markX, midY + markHalf);
+            }
+            if (volumeUpFast || volumeDownFast) {
+                RECT fastRect{ left + side * 2 / 3, top + side * 3 / 4, left + side, top + side };
+                DrawCenteredText(hdc, fastRect, volumeUpFast ? L"++" : L"--", 11, true);
             }
         }
     } else if (screenshot) {
@@ -927,6 +933,26 @@ static WORD VkFromToken(std::wstring token) {
     if (token == L"TAB") return VK_TAB;
     if (token == L"SPACE") return VK_SPACE;
     if (token == L"BACKSPACE" || token == L"BKSP") return VK_BACK;
+    if (token == L"CAPSLOCK" || token == L"CAPS_LOCK") return VK_CAPITAL;
+    if (token == L"NUMLOCK" || token == L"NUM_LOCK") return VK_NUMLOCK;
+    if (token == L"SCROLLLOCK" || token == L"SCROLL_LOCK") return VK_SCROLL;
+    if (token == L"PAUSE" || token == L"BREAK") return VK_PAUSE;
+    if (token == L"MENU" || token == L"APPS") return VK_APPS;
+    if (token == L"NUM0") return VK_NUMPAD0;
+    if (token == L"NUM1") return VK_NUMPAD1;
+    if (token == L"NUM2") return VK_NUMPAD2;
+    if (token == L"NUM3") return VK_NUMPAD3;
+    if (token == L"NUM4") return VK_NUMPAD4;
+    if (token == L"NUM5") return VK_NUMPAD5;
+    if (token == L"NUM6") return VK_NUMPAD6;
+    if (token == L"NUM7") return VK_NUMPAD7;
+    if (token == L"NUM8") return VK_NUMPAD8;
+    if (token == L"NUM9") return VK_NUMPAD9;
+    if (token == L"NUMADD") return VK_ADD;
+    if (token == L"NUMSUB") return VK_SUBTRACT;
+    if (token == L"NUMMUL") return VK_MULTIPLY;
+    if (token == L"NUMDIV") return VK_DIVIDE;
+    if (token == L"NUMDECIMAL") return VK_DECIMAL;
     if (token == L"DELETE" || token == L"DEL") return VK_DELETE;
     if (token == L"INSERT" || token == L"INS") return VK_INSERT;
     if (token == L"HOME") return VK_HOME;
@@ -984,6 +1010,14 @@ static void SendKeyChord(const std::wstring& spec) {
 
 static void SendKeySpec(const std::wstring& spec) {
     std::wstring trimmed = Trim(spec);
+    if (trimmed == L"VOLUME_UP_FAST" || trimmed == L"VOLUME_DOWN_FAST") {
+        const std::wstring chord = trimmed == L"VOLUME_UP_FAST" ? L"VOLUME_UP" : L"VOLUME_DOWN";
+        for (int i = 0; i < 5; ++i) {
+            SendKeyChord(chord);
+            Sleep(20);
+        }
+        return;
+    }
     if (trimmed.rfind(L"SEQ:", 0) != 0) {
         SendKeyChord(trimmed);
         return;
@@ -1491,8 +1525,16 @@ static std::wstring ComboText(HWND combo) {
 }
 
 static bool IsSystemKeyKind(const std::wstring& kind) {
-    return kind == L"Volume Up" || kind == L"Volume Down" || kind == L"Mute" || kind == L"Screenshot" ||
-        kind == L"Play/Pause" || kind == L"Next Track" || kind == L"Previous Track" || kind == L"Stop Media";
+    return kind == L"Volume Up" || kind == L"音量アップ" ||
+        kind == L"Volume Down" || kind == L"音量ダウン" ||
+        kind == L"Volume Up++" || kind == L"音量アップ++" ||
+        kind == L"Volume Down--" || kind == L"音量ダウン--" ||
+        kind == L"Mute" || kind == L"ミュート" ||
+        kind == L"Screenshot" || kind == L"スクリーンショット" ||
+        kind == L"Play/Pause" || kind == L"再生/一時停止" ||
+        kind == L"Next Track" || kind == L"次のトラック" ||
+        kind == L"Previous Track" || kind == L"前のトラック" ||
+        kind == L"Stop Media" || kind == L"停止";
 }
 
 static bool IsSequenceKeySpec(const std::wstring& spec) {
@@ -1500,14 +1542,16 @@ static bool IsSequenceKeySpec(const std::wstring& spec) {
 }
 
 static std::wstring SystemKeyTarget(const std::wstring& kind) {
-    if (kind == L"Volume Up") return L"VOLUME_UP";
-    if (kind == L"Volume Down") return L"VOLUME_DOWN";
-    if (kind == L"Mute") return L"VOLUME_MUTE";
-    if (kind == L"Screenshot") return L"PRINTSCREEN";
-    if (kind == L"Play/Pause") return L"MEDIA_PLAY_PAUSE";
-    if (kind == L"Next Track") return L"MEDIA_NEXT_TRACK";
-    if (kind == L"Previous Track") return L"MEDIA_PREV_TRACK";
-    if (kind == L"Stop Media") return L"MEDIA_STOP";
+    if (kind == L"Volume Up" || kind == L"音量アップ") return L"VOLUME_UP";
+    if (kind == L"Volume Down" || kind == L"音量ダウン") return L"VOLUME_DOWN";
+    if (kind == L"Volume Up++" || kind == L"音量アップ++") return L"VOLUME_UP_FAST";
+    if (kind == L"Volume Down--" || kind == L"音量ダウン--") return L"VOLUME_DOWN_FAST";
+    if (kind == L"Mute" || kind == L"ミュート") return L"VOLUME_MUTE";
+    if (kind == L"Screenshot" || kind == L"スクリーンショット") return L"PRINTSCREEN";
+    if (kind == L"Play/Pause" || kind == L"再生/一時停止") return L"MEDIA_PLAY_PAUSE";
+    if (kind == L"Next Track" || kind == L"次のトラック") return L"MEDIA_NEXT_TRACK";
+    if (kind == L"Previous Track" || kind == L"前のトラック") return L"MEDIA_PREV_TRACK";
+    if (kind == L"Stop Media" || kind == L"停止") return L"MEDIA_STOP";
     return L"";
 }
 
@@ -1517,14 +1561,16 @@ static std::wstring ActionKindForButton(const ButtonConfig& button) {
     if (action.type == ActionType::Settings) return L"Windows Settings";
     if (action.type == ActionType::Command) return L"Command";
     if (action.type == ActionType::Keys) {
-        if (action.target == L"VOLUME_UP") return L"Volume Up";
-        if (action.target == L"VOLUME_DOWN") return L"Volume Down";
-        if (action.target == L"VOLUME_MUTE") return L"Mute";
-        if (action.target == L"PRINTSCREEN") return L"Screenshot";
-        if (action.target == L"MEDIA_PLAY_PAUSE") return L"Play/Pause";
-        if (action.target == L"MEDIA_NEXT_TRACK") return L"Next Track";
-        if (action.target == L"MEDIA_PREV_TRACK") return L"Previous Track";
-        if (action.target == L"MEDIA_STOP") return L"Stop Media";
+        if (action.target == L"VOLUME_UP") return L"音量アップ";
+        if (action.target == L"VOLUME_DOWN") return L"音量ダウン";
+        if (action.target == L"VOLUME_UP_FAST") return L"音量アップ++";
+        if (action.target == L"VOLUME_DOWN_FAST") return L"音量ダウン--";
+        if (action.target == L"VOLUME_MUTE") return L"ミュート";
+        if (action.target == L"PRINTSCREEN") return L"スクリーンショット";
+        if (action.target == L"MEDIA_PLAY_PAUSE") return L"再生/一時停止";
+        if (action.target == L"MEDIA_NEXT_TRACK") return L"次のトラック";
+        if (action.target == L"MEDIA_PREV_TRACK") return L"前のトラック";
+        if (action.target == L"MEDIA_STOP") return L"停止";
         return L"Keys";
     }
     if (action.target.rfind(L"http://", 0) == 0 || action.target.rfind(L"https://", 0) == 0) return L"URL";
@@ -1558,8 +1604,8 @@ static void UpdateButtonEditorFields(HWND hwnd) {
         kind == L"Folder" ? L"Folder" :
         kind == L"File" ? L"File" : L"Target");
     SetWindowTextW(argsLabel, kind == L"Command" ? L"Arguments" : L"Options");
-    SetWindowTextW(browse, kind == L"Folder" ? L"Folder" :
-        kind == L"Keys" ? L"Choose" : L"Select");
+    SetWindowTextW(browse, kind == L"Folder" ? L"フォルダー" :
+        kind == L"Keys" ? L"選択" : L"選択");
     SetWindowTextW(import, kind == L"App (.exe)" ? L"Start menu" :
         kind == L"Windows Settings" ? L"Choose" : L"Favorites");
 
@@ -1794,13 +1840,15 @@ static void FillDisplayDefaults(HWND hwnd, const std::wstring& kind) {
     if (IsSystemKeyKind(kind)) {
         if (GetWindowTextLengthW(titleCtrl) == 0) SetWindowTextW(titleCtrl, kind.c_str());
         if (GetWindowTextLengthW(textCtrl) == 0) {
-            std::wstring badge = kind == L"Volume Up" ? L"VOL+" :
-                kind == L"Volume Down" ? L"VOL-" :
-                kind == L"Mute" ? L"MUTE" :
-                kind == L"Screenshot" ? L"SS" :
-                kind == L"Play/Pause" ? L"PLAY" :
-                kind == L"Next Track" ? L"NEXT" :
-                kind == L"Previous Track" ? L"PREV" : L"STOP";
+            std::wstring badge = (kind == L"Volume Up" || kind == L"音量アップ") ? L"VOL+" :
+                (kind == L"Volume Down" || kind == L"音量ダウン") ? L"VOL-" :
+                (kind == L"Volume Up++" || kind == L"音量アップ++") ? L"VOL++" :
+                (kind == L"Volume Down--" || kind == L"音量ダウン--") ? L"VOL--" :
+                (kind == L"Mute" || kind == L"ミュート") ? L"MUTE" :
+                (kind == L"Screenshot" || kind == L"スクリーンショット") ? L"SS" :
+                (kind == L"Play/Pause" || kind == L"再生/一時停止") ? L"PLAY" :
+                (kind == L"Next Track" || kind == L"次のトラック") ? L"NEXT" :
+                (kind == L"Previous Track" || kind == L"前のトラック") ? L"PREV" : L"STOP";
             SetWindowTextW(textCtrl, badge.c_str());
         }
     } else if (kind == L"URL") {
@@ -1827,29 +1875,47 @@ struct KeyChoice {
     const wchar_t* label101;
     const wchar_t* label106;
     const wchar_t* token;
+    int col;
+    int row;
+    int units;
 };
 
 static const KeyChoice kKeyChoices[] = {
-    { L"A", L"A", L"A" }, { L"B", L"B", L"B" }, { L"C", L"C", L"C" }, { L"D", L"D", L"D" },
-    { L"E", L"E", L"E" }, { L"F", L"F", L"F" }, { L"G", L"G", L"G" }, { L"H", L"H", L"H" },
-    { L"I", L"I", L"I" }, { L"J", L"J", L"J" }, { L"K", L"K", L"K" }, { L"L", L"L", L"L" },
-    { L"M", L"M", L"M" }, { L"N", L"N", L"N" }, { L"O", L"O", L"O" }, { L"P", L"P", L"P" },
-    { L"Q", L"Q", L"Q" }, { L"R", L"R", L"R" }, { L"S", L"S", L"S" }, { L"T", L"T", L"T" },
-    { L"U", L"U", L"U" }, { L"V", L"V", L"V" }, { L"W", L"W", L"W" }, { L"X", L"X", L"X" },
-    { L"Y", L"Y", L"Y" }, { L"Z", L"Z", L"Z" },
-    { L"0", L"0", L"0" }, { L"1", L"1", L"1" }, { L"2", L"2", L"2" }, { L"3", L"3", L"3" },
-    { L"4", L"4", L"4" }, { L"5", L"5", L"5" }, { L"6", L"6", L"6" }, { L"7", L"7", L"7" },
-    { L"8", L"8", L"8" }, { L"9", L"9", L"9" },
-    { L"F1", L"F1", L"F1" }, { L"F2", L"F2", L"F2" }, { L"F3", L"F3", L"F3" }, { L"F4", L"F4", L"F4" },
-    { L"F5", L"F5", L"F5" }, { L"F6", L"F6", L"F6" }, { L"F7", L"F7", L"F7" }, { L"F8", L"F8", L"F8" },
-    { L"F9", L"F9", L"F9" }, { L"F10", L"F10", L"F10" }, { L"F11", L"F11", L"F11" }, { L"F12", L"F12", L"F12" },
-    { L"Enter", L"Enter", L"ENTER" }, { L"Esc", L"Esc", L"ESC" }, { L"Tab", L"Tab", L"TAB" }, { L"Space", L"Space", L"SPACE" },
-    { L"Back", L"Back", L"BACKSPACE" }, { L"Delete", L"Delete", L"DELETE" }, { L"Insert", L"Insert", L"INSERT" },
-    { L"Home", L"Home", L"HOME" }, { L"End", L"End", L"END" }, { L"PgUp", L"PgUp", L"PAGEUP" }, { L"PgDn", L"PgDn", L"PAGEDOWN" },
-    { L"Up", L"Up", L"UP" }, { L"Down", L"Down", L"DOWN" }, { L"Left", L"Left", L"LEFT" }, { L"Right", L"Right", L"RIGHT" },
-    { L"-", L"-", L"OEM_MINUS" }, { L"=", L"^", L"OEM_PLUS" }, { L"[", L"@", L"OEM_4" }, { L"]", L"[", L"OEM_6" },
-    { L"\\", L"]", L"OEM_5" }, { L";", L";", L"OEM_1" }, { L"'", L":", L"OEM_7" }, { L",", L",", L"OEM_COMMA" },
-    { L".", L".", L"OEM_PERIOD" }, { L"/", L"/", L"OEM_2" }, { L"Grave", L"Hankaku", L"OEM_3" }, { L"Intl", L"Yen", L"OEM_102" }
+    { L"Esc", L"Esc", L"ESC", 0, 0, 1 }, { L"F1", L"F1", L"F1", 2, 0, 1 }, { L"F2", L"F2", L"F2", 3, 0, 1 }, { L"F3", L"F3", L"F3", 4, 0, 1 },
+    { L"F4", L"F4", L"F4", 5, 0, 1 }, { L"F5", L"F5", L"F5", 7, 0, 1 }, { L"F6", L"F6", L"F6", 8, 0, 1 }, { L"F7", L"F7", L"F7", 9, 0, 1 },
+    { L"F8", L"F8", L"F8", 10, 0, 1 }, { L"F9", L"F9", L"F9", 12, 0, 1 }, { L"F10", L"F10", L"F10", 13, 0, 1 }, { L"F11", L"F11", L"F11", 14, 0, 1 },
+    { L"F12", L"F12", L"F12", 15, 0, 1 }, { L"Prt", L"Prt", L"PRINTSCREEN", 17, 0, 1 }, { L"Scr", L"Scr", L"SCROLL_LOCK", 18, 0, 1 }, { L"Pause", L"Pause", L"PAUSE", 19, 0, 1 },
+
+    { L"`", L"半/全", L"OEM_3", 0, 1, 1 }, { L"1", L"1", L"1", 1, 1, 1 }, { L"2", L"2", L"2", 2, 1, 1 }, { L"3", L"3", L"3", 3, 1, 1 },
+    { L"4", L"4", L"4", 4, 1, 1 }, { L"5", L"5", L"5", 5, 1, 1 }, { L"6", L"6", L"6", 6, 1, 1 }, { L"7", L"7", L"7", 7, 1, 1 },
+    { L"8", L"8", L"8", 8, 1, 1 }, { L"9", L"9", L"9", 9, 1, 1 }, { L"0", L"0", L"0", 10, 1, 1 }, { L"-", L"-", L"OEM_MINUS", 11, 1, 1 },
+    { L"=", L"^", L"OEM_PLUS", 12, 1, 1 }, { L"Back", L"Back", L"BACKSPACE", 13, 1, 2 },
+    { L"Ins", L"Ins", L"INSERT", 17, 1, 1 }, { L"Home", L"Home", L"HOME", 18, 1, 1 }, { L"PgUp", L"PgUp", L"PAGEUP", 19, 1, 1 },
+    { L"Num", L"Num", L"NUM_LOCK", 21, 1, 1 }, { L"/", L"/", L"NUMDIV", 22, 1, 1 }, { L"*", L"*", L"NUMMUL", 23, 1, 1 }, { L"-", L"-", L"NUMSUB", 24, 1, 1 },
+
+    { L"Tab", L"Tab", L"TAB", 0, 2, 2 }, { L"Q", L"Q", L"Q", 2, 2, 1 }, { L"W", L"W", L"W", 3, 2, 1 }, { L"E", L"E", L"E", 4, 2, 1 },
+    { L"R", L"R", L"R", 5, 2, 1 }, { L"T", L"T", L"T", 6, 2, 1 }, { L"Y", L"Y", L"Y", 7, 2, 1 }, { L"U", L"U", L"U", 8, 2, 1 },
+    { L"I", L"I", L"I", 9, 2, 1 }, { L"O", L"O", L"O", 10, 2, 1 }, { L"P", L"P", L"P", 11, 2, 1 }, { L"[", L"@", L"OEM_4", 12, 2, 1 },
+    { L"]", L"[", L"OEM_6", 13, 2, 1 }, { L"\\", L"]", L"OEM_5", 14, 2, 1 },
+    { L"Del", L"Del", L"DELETE", 17, 2, 1 }, { L"End", L"End", L"END", 18, 2, 1 }, { L"PgDn", L"PgDn", L"PAGEDOWN", 19, 2, 1 },
+    { L"7", L"7", L"NUM7", 21, 2, 1 }, { L"8", L"8", L"NUM8", 22, 2, 1 }, { L"9", L"9", L"NUM9", 23, 2, 1 }, { L"+", L"+", L"NUMADD", 24, 2, 1 },
+
+    { L"Caps", L"Caps", L"CAPS_LOCK", 0, 3, 2 }, { L"A", L"A", L"A", 2, 3, 1 }, { L"S", L"S", L"S", 3, 3, 1 }, { L"D", L"D", L"D", 4, 3, 1 },
+    { L"F", L"F", L"F", 5, 3, 1 }, { L"G", L"G", L"G", 6, 3, 1 }, { L"H", L"H", L"H", 7, 3, 1 }, { L"J", L"J", L"J", 8, 3, 1 },
+    { L"K", L"K", L"K", 9, 3, 1 }, { L"L", L"L", L"L", 10, 3, 1 }, { L";", L";", L"OEM_1", 11, 3, 1 }, { L"'", L":", L"OEM_7", 12, 3, 1 },
+    { L"Enter", L"Enter", L"ENTER", 13, 3, 2 },
+    { L"4", L"4", L"NUM4", 21, 3, 1 }, { L"5", L"5", L"NUM5", 22, 3, 1 }, { L"6", L"6", L"NUM6", 23, 3, 1 },
+
+    { L"Shift", L"Shift", L"SHIFT", 0, 4, 2 }, { L"Z", L"Z", L"Z", 2, 4, 1 }, { L"X", L"X", L"X", 3, 4, 1 }, { L"C", L"C", L"C", 4, 4, 1 },
+    { L"V", L"V", L"V", 5, 4, 1 }, { L"B", L"B", L"B", 6, 4, 1 }, { L"N", L"N", L"N", 7, 4, 1 }, { L"M", L"M", L"M", 8, 4, 1 },
+    { L",", L",", L"OEM_COMMA", 9, 4, 1 }, { L".", L".", L"OEM_PERIOD", 10, 4, 1 }, { L"/", L"/", L"OEM_2", 11, 4, 1 },
+    { L"Intl", L"Yen", L"OEM_102", 12, 4, 1 }, { L"Shift", L"Shift", L"SHIFT", 13, 4, 2 },
+    { L"Up", L"Up", L"UP", 18, 4, 1 }, { L"1", L"1", L"NUM1", 21, 4, 1 }, { L"2", L"2", L"NUM2", 22, 4, 1 }, { L"3", L"3", L"NUM3", 23, 4, 1 },
+
+    { L"Ctrl", L"Ctrl", L"CTRL", 0, 5, 2 }, { L"Win", L"Win", L"WIN", 2, 5, 1 }, { L"Alt", L"Alt", L"ALT", 3, 5, 2 },
+    { L"Space", L"Space", L"SPACE", 5, 5, 6 }, { L"Alt", L"Alt", L"ALT", 11, 5, 2 }, { L"Menu", L"Menu", L"MENU", 13, 5, 1 }, { L"Ctrl", L"Ctrl", L"CTRL", 14, 5, 1 },
+    { L"Left", L"Left", L"LEFT", 17, 5, 1 }, { L"Down", L"Down", L"DOWN", 18, 5, 1 }, { L"Right", L"Right", L"RIGHT", 19, 5, 1 },
+    { L"0", L"0", L"NUM0", 21, 5, 2 }, { L".", L".", L"NUMDECIMAL", 23, 5, 1 }
 };
 
 struct KeyPickerContext {
@@ -1868,7 +1934,7 @@ static std::wstring KeyPickerChord(HWND hwnd, const wchar_t* token) {
 }
 
 static bool KeyPickerSequenceMode(HWND hwnd) {
-    return ComboText(GetDlgItem(hwnd, IDC_KEY_MODE)) == L"Sequence";
+    return ComboText(GetDlgItem(hwnd, IDC_KEY_MODE)) == L"順次押下";
 }
 
 static void KeyPickerAddSpec(HWND hwnd, const std::wstring& chord) {
@@ -1891,30 +1957,29 @@ static LRESULT CALLBACK KeyPickerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         auto* cs = reinterpret_cast<CREATESTRUCTW*>(lp);
         ctx = reinterpret_cast<KeyPickerContext*>(cs->lpCreateParams);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(ctx));
-        AddLabel(hwnd, L"Mode", 24, 22, 80, 24);
-        HWND mode = AddCombo(hwnd, IDC_KEY_MODE, 88, 18, 160, 160);
-        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Simultaneous"));
-        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Sequence"));
+        AddLabel(hwnd, L"入力方式", 24, 22, 80, 24);
+        HWND mode = AddCombo(hwnd, IDC_KEY_MODE, 104, 18, 160, 160);
+        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"同時押下"));
+        SendMessageW(mode, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"順次押下"));
         SendMessageW(mode, CB_SETCURSEL, IsSequenceKeySpec(ctx->spec) ? 1 : 0, 0);
-        AddButton(hwnd, IDC_KEY_CTRL, L"Ctrl", 270, 18, 72, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_ALT, L"Alt", 348, 18, 72, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_SHIFT, L"Shift", 426, 18, 72, 30, BS_AUTOCHECKBOX);
-        AddButton(hwnd, IDC_KEY_WIN, L"Win", 504, 18, 72, 30, BS_AUTOCHECKBOX);
-        AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 552, 34);
-        AddButton(hwnd, IDC_KEY_CLEAR, L"Clear", 588, 62, 82, 34);
+        AddButton(hwnd, IDC_KEY_CTRL, L"Ctrl", 286, 18, 74, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_ALT, L"Alt", 366, 18, 74, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_SHIFT, L"Shift", 446, 18, 84, 30, BS_AUTOCHECKBOX);
+        AddButton(hwnd, IDC_KEY_WIN, L"Win", 536, 18, 74, 30, BS_AUTOCHECKBOX);
+        AddEdit(hwnd, IDC_KEY_SPEC, ctx->spec, 24, 62, 760, 34);
+        AddButton(hwnd, IDC_KEY_CLEAR, L"クリア", 800, 62, 92, 34);
 
-        const int cols = 12;
-        const int w = 72;
-        const int h = 32;
-        const int gap = 8;
         for (int i = 0; i < static_cast<int>(sizeof(kKeyChoices) / sizeof(kKeyChoices[0])); ++i) {
-            int x = 24 + (i % cols) * (w + gap);
-            int y = 116 + (i / cols) * (h + gap);
+            const int unit = 46;
+            const int h = 34;
+            int x = 24 + kKeyChoices[i].col * unit;
+            int y = 116 + kKeyChoices[i].row * 42;
+            int w = kKeyChoices[i].units * unit - 4;
             const wchar_t* label = g.config.keyboardLayout == 101 ? kKeyChoices[i].label101 : kKeyChoices[i].label106;
             AddButton(hwnd, IDC_KEY_BUTTON_BASE + i, label, x, y, w, h);
         }
-        AddButton(hwnd, IDOK, L"OK", 760, 520, 96, 38, BS_DEFPUSHBUTTON);
-        AddButton(hwnd, IDCANCEL, L"Cancel", 868, 520, 104, 38);
+        AddButton(hwnd, IDOK, L"OK", 1030, 590, 96, 38, BS_DEFPUSHBUTTON);
+        AddButton(hwnd, IDCANCEL, L"キャンセル", 1138, 590, 116, 38);
         return 0;
     }
     case WM_COMMAND: {
@@ -1967,8 +2032,8 @@ static std::wstring ChooseKeySpec(HWND owner, const std::wstring& current) {
         RegisterClassW(&wc);
         registered = true;
     }
-    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherKeyPicker", L"Choose Keys",
-        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 1010, 620,
+    HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, L"LauncherKeyPicker", L"キー選択",
+        WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 690,
         owner, nullptr, g.instance, &ctx);
     RunOwnedModal(dialog);
     return ctx.accepted ? ctx.spec : L"";
@@ -1984,7 +2049,7 @@ static LRESULT CALLBACK ButtonEditorProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         AddLabel(hwnd, L"Action", 32, 28, 180, 28);
         AddLabel(hwnd, L"Type", 56, 74, 140, 28);
         HWND combo = AddCombo(hwnd, IDC_ACTION, 220, 70, 700, 340);
-        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"Volume Up", L"Volume Down", L"Mute", L"Play/Pause", L"Next Track", L"Previous Track", L"Stop Media", L"Screenshot", L"Command", L"Keys", L"None" }) {
+        for (const wchar_t* item : { L"URL", L"File", L"App (.exe)", L"Folder", L"Windows Settings", L"音量アップ", L"音量ダウン", L"音量アップ++", L"音量ダウン--", L"ミュート", L"再生/一時停止", L"次のトラック", L"前のトラック", L"停止", L"スクリーンショット", L"Command", L"Keys", L"None" }) {
             SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(item));
         }
         std::wstring kind = ActionKindForButton(ctx->original);
